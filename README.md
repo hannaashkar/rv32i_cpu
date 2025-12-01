@@ -4,6 +4,13 @@
   <img src="https://img.shields.io/badge/Project-Pipelined_CPU-red?style=for-the-badge&logo=riscv" />
 </p>
 
+
+https://github.com/user-attachments/assets/236d160b-ccb6-4e1c-92c8-c92e5c0e4397
+
+
+
+
+
 🧠 RISC-V 5-Stage Pipelined CPU (with Branch Prediction & Hazard Handling)
 Designed and implemented by: Hanna Ashkar
 
