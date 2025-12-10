@@ -174,20 +174,6 @@ module de10_top(
 
 endmodule
 
-📸 Screenshots / Videos
-<img width="1920" height="1080" alt="Screenshot (1)" src="https://github.com/user-attachments/assets/c51f4eb5-f621-4906-a688-501e1813d38b" />
-
-
-💡 Future Work
-Add RV32IM (mul/div)
-
-Add instruction/data caches
-
-Add UART MMIO
-
-Add exception/interrupt logic
-
-Support full RV32I assembler loading
 
 👨‍💻 Author
 
