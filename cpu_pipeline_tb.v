@@ -1,25 +1,26 @@
 module cpu_pipeline_tb;
 
-    reg clk = 0;
+    // Basic clock and reset setup
+    reg clk   = 0;
     reg reset = 1;
 
-    // Instantiate your top-level pipelined CPU
+    // Instantiate the full pipelined CPU
     cpu_pipeline dut (
-        .clk(clk),
-        .reset(reset),
-		  .leds(),          // leave unconnected but declared
-         .switches(10'b0)  // switches = 0
+        .clk      (clk),
+        .reset    (reset),
+        .leds     (),          // not used in simulation
+        .switches (10'b0)      // keep switches tied to zero
     );
 
-    // Clock generation: 10ns period
+    // Clock generator: 10 ns period (100 MHz in simulation)
     always #5 clk = ~clk;
 
     initial begin
-        // Hold reset for a short time
+        // Apply reset for a short time to initialize the pipeline
         #20;
         reset = 0;
 
-        // Run the CPU for some cycles
+        // Let the CPU run a few hundred cycles
         #300;
         $stop;
     end
