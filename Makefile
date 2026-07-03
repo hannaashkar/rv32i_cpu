@@ -112,6 +112,55 @@ sw/ctests/%.elf: sw/ctests/%.c $(SW_CDEPS)
 
 .PRECIOUS: sw/ctests/%.elf
 
+# --- CoreMark (Task 1.6 baseline benchmark) ----------------------------------
+# Upstream EEMBC sources vendored unmodified in sw/coremark/ (Apache-2.0);
+# the port layer lives in sw/coremark/rv32/. Timing = rdcycle (D012),
+# console = sim-console MMIO snoop. Validation is CoreMark's own CRC check,
+# printed as "Correct operation validated" — grep enforces it below.
+CM_DIR  := sw/coremark
+CM_SRCS := $(CM_DIR)/core_list_join.c $(CM_DIR)/core_main.c \
+           $(CM_DIR)/core_matrix.c $(CM_DIR)/core_state.c \
+           $(CM_DIR)/core_util.c \
+           $(CM_DIR)/rv32/core_portme.c $(CM_DIR)/rv32/ee_printf.c \
+           $(CM_DIR)/rv32/cvt.c
+# 600 iterations ≈ 510M cycles ≈ 10.2 simulated seconds at 50 MHz — the
+# minimum CoreMark accepts as a reportable run (its 10-second rule counts
+# into total_errors!). Use CM_ITER=10 for a quick correctness check; the
+# CRC gate below is iteration-count independent.
+CM_ITER ?= 600
+CM_OPT  ?= -O2
+CM_FLAGS = $(SW_CFLAGS) $(CM_OPT) -ffreestanding \
+           -I$(CM_DIR) -I$(CM_DIR)/rv32 -Isw/common \
+           -DITERATIONS=$(CM_ITER) \
+           -DFLAGS_STR='"$(CM_OPT) -march=rv32i_zicsr"'
+
+# ITERATIONS/opt level are baked in via -D, so the elf must rebuild when
+# CM_ITER/CM_OPT change even though no source file did: the stamp file
+# records the last-built flags and only changes when they do.
+$(CM_DIR)/.cm_flags_stamp: FORCE
+	@echo '$(CM_ITER) $(CM_OPT)' | cmp -s - $@ 2>/dev/null \
+	    || echo '$(CM_ITER) $(CM_OPT)' > $@
+FORCE:
+
+$(CM_DIR)/coremark.elf: $(CM_SRCS) $(CM_DIR)/coremark.h \
+                        $(CM_DIR)/rv32/core_portme.h $(SW_CDEPS) \
+                        $(CM_DIR)/.cm_flags_stamp
+	$(RISCV_GCC) $(CM_FLAGS) -o $@ $(CRT0) $(LIBMIN) $(CM_SRCS) -lm -lgcc
+
+# Pass gate = the three benchmark CRCs against the official expected values
+# for the 2K performance profile (seeds 0/0/0x66) — these are independent
+# of iteration count, unlike "Correct operation validated" which also
+# requires the >=10s rule to be satisfied (CM_ITER >= 600 here).
+coremark: $(SIM_BIN) $(CM_DIR)/coremark.text.hex $(CM_DIR)/coremark.data.hex
+	./$(SIM_BIN) +imem=$(CM_DIR)/coremark.text.hex \
+	    +dmem=$(CM_DIR)/coremark.data.hex \
+	    +max_cycles=900000000 | tee coremark.log
+	@grep -Eq 'crclist.*0xe714'  coremark.log && \
+	 grep -Eq 'crcmatrix.*0x1fd7' coremark.log && \
+	 grep -Eq 'crcstate.*0x8e3a'  coremark.log \
+	    && echo "coremark: CRCs match official 2K performance-run values" \
+	    || { echo "coremark: CRC MISMATCH — computation is wrong"; exit 1; }
+
 # --- run ------------------------------------------------------------------------
 test: $(SIM_BIN) $(SW_TESTS)
 	./$(SIM_BIN) +imem=$(PROG)
@@ -152,3 +201,5 @@ clean:
 	rm -rf obj_dir sim.fst
 	rm -f sw/tests/*.elf sw/tests/*.bin sw/tests/*.hex
 	rm -f sw/ctests/*.elf sw/ctests/*.bin sw/ctests/*.hex
+	rm -f sw/coremark/coremark.elf sw/coremark/*.bin sw/coremark/*.hex
+	rm -f sw/coremark/.cm_flags_stamp coremark.log

@@ -174,7 +174,20 @@ valid-bit retirement over the minimal options):
   soft mul/div, all data sections, string ops) — 2100 cycles, 1880
   instret, IPC 0.895. Regression now 9/9. No RTL touched in this stage.
 
-**Next**: CoreMark port (ee_printf-less validation or minimal UART-free
-reporting via MMIO) → baseline IPC → docs/BASELINE.md →
-tag v1.0-inorder-baseline. Consider porting riscv-tests rv32ui as the
-acceptance gate alongside.
+**2026-07-03 (night)** — CoreMark baseline measured (branch `coremark`);
+**Task 1 complete, tagged `v1.0-inorder-baseline`**:
+- EEMBC CoreMark vendored unmodified in `sw/coremark/` (Apache-2.0), port
+  layer in `sw/coremark/rv32/`: clock = rdcycle, ee_printf → sim-console
+  MMIO (0x40000010) snooped by the harness — zero RTL change, no-op on HW.
+- `make coremark` = 600-iteration official-rules run (≥10 simulated
+  seconds at 50 MHz), pass gate = the three official CRCs.
+- **Baseline: 1.177 CoreMark/MHz, IPC 0.849** (510.1M cycles, 432.9M
+  instret, "Correct operation validated") — full context, caveats, and
+  reproduction commands in docs/BASELINE.md. Regression 9/9 throughout.
+
+**Next** (needs Hanna's go after she reviews the baseline numbers):
+OoO stage kickoff per roadmap — first architectural decisions to present:
+rename scheme, ROB/IQ sizing, recovery mechanism. Also worth queuing:
+riscv-tests rv32ui as acceptance gate, per-cause stall counters in
+csr_file (know where the 0.178 CPI goes before changing anything),
+B005/B006 (PLL+SDC, BRAM memories) as measured post-baseline stages.
