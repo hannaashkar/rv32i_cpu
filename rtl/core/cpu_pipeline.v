@@ -8,7 +8,10 @@ module cpu_pipeline (
     // ======================================================
     // IF (Instruction Fetch) Stage
     // ======================================================
-    wire [31:0] pcF;
+    // NOTE: /*verilator public_flat_rd*/ marks are simulation-only test
+    // hooks read by the Verilator harness (tb/verilator/sim_main.cpp).
+    // Quartus sees them as plain comments — no synthesis impact.
+    wire [31:0] pcF /*verilator public_flat_rd*/;
     wire [31:0] next_pcF;
     wire [31:0] instrF;
 
@@ -159,7 +162,7 @@ module cpu_pipeline (
     wire [2:0]  funct3E;
     wire [6:0]  funct7E;
 
-    wire [31:0] alu_resultM; // Used for forwarding
+    wire [31:0] alu_resultM /*verilator public_flat_rd*/; // Used for forwarding
 
     id_ex_reg IDEX0 (
         .clk         (clk),
@@ -310,10 +313,10 @@ module cpu_pipeline (
     // ======================================================
     wire       RegWriteM;
     wire       MemReadM;
-    wire       MemWriteM;
+    wire       MemWriteM /*verilator public_flat_rd*/;
     wire       MemToRegM;
     wire       BranchM;
-    wire [31:0] rs2_dataM;
+    wire [31:0] rs2_dataM /*verilator public_flat_rd*/;
     wire        alu_zeroM;
     wire [31:0] branch_targetM;
     wire [4:0]  rdM;

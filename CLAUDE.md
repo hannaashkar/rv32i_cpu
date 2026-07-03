@@ -97,18 +97,29 @@ the RTL**.
 
 ## Current status (update every session!)
 
-**2026-07-03** — Task 1 steps 1–3 done:
+**2026-07-03** — Task 1 steps 1–5 done:
 - Explored and documented the legacy code; canonical source = GitHub repo
   `hannaashkar/rv32i_cpu`, verified file-by-file against the last local
   Quartus build.
 - Restructured into `rtl/tb/sw/synth/docs` (branch `restructure`, pushed);
-  fixed B001 (dangling `debug_x3` — repo didn't compile); created clean
-  Quartus project; seeded BUGLOG/DECISIONS; verified with `quartus_map`
-  (0 errors). Local `main` has the merge; **push of `main` pending Hanna**
-  (permission-gated).
-- Toolchain installers downloaded to `C:\Users\ASUS\tools\downloads`
-  (MSYS2 base + xPack riscv-none-elf-gcc 15.2.0), not yet installed.
+  fixed B001; clean Quartus project; BUGLOG/DECISIONS seeded. Local `main`
+  has everything merged; **push of `main` pending Hanna** (permission-gated).
+- Toolchain installed & working: MSYS2 UCRT64 (Verilator 5.048, make, g++)
+  + xPack riscv-none-elf-gcc 15.2.0. Gotchas encoded in the Makefile:
+  gcc 16.1.0-5 cannot link `-Os` C++ (force `-O2`), Verilator's `__ALL.cpp`
+  rule breaks under MSYS make (use `VM_PARALLEL_BUILDS=1`), and
+  `sc_time_stamp()` must be defined explicitly (MinGW has no weak symbols).
+- Verilator harness live (branch `sim-harness`): `make test` assembles
+  `sw/tests/*.S` (riscv-gcc → objcopy → scripts/bin2hex.py → hex), runs
+  `obj_dir/Vcpu_pipeline +imem=<hex>`; test-end protocol = store to
+  0x40000008 (1 = PASS); `make wave` dumps sim.fst. imem reworked for
+  $readmemh loading (+imem runtime override); pipeline signals exposed to
+  the TB via `/*verilator public_flat_rd*/` comments (Quartus-invisible).
+  **First program PASSes in 42 cycles**; `quartus_map` still 0 errors.
+- New bug found while writing the smoke test: B007 — store data bypasses
+  forwarding (EX/MEM latches unforwarded `rs2_dataE`).
 
-**Next**: install toolchain → Verilator harness (Makefile, `$readmemh`
-program loading, pass/fail via magic MMIO address, waveform dump on demand)
-→ first program in simulation → RV32I completion plan (options for Hanna).
+**Next**: RV32I completion plan — present option sets to Hanna (shifter,
+ADDI/funct7 fix, branch conditions incl. B004/B007 fixes, JAL/JALR,
+LUI/AUIPC, byte/half memory ops), implement incrementally with per-feature
+tests → then cycle/instret CSRs → CoreMark baseline (Tasks 1.6–1.7).

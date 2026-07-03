@@ -1,29 +1,57 @@
-module imem(
-    input  wire [31:0] pc,           // byte address coming from Fetch stage
-    output reg  [31:0] instruction   // fetched instruction
+// ============================================================================
+// imem — instruction memory (word-addressed, combinational read)
+//
+// Purpose:    Holds the program the core executes. Contents are loaded from
+//             a hex file ($readmemh format: one 32-bit word per line,
+//             little-endian instruction words, '//' comments allowed).
+// Interfaces: pc (byte address from IF) -> instruction (combinational read).
+// Assumptions / limitations:
+//   * Combinational read preserves the original same-cycle fetch timing but
+//     synthesizes to logic cells instead of M9K block RAM (BUGLOG B006 —
+//     synchronous-read rework is a planned architectural change).
+//   * pc bits above the memory range are ignored (memory aliases).
+//
+// Program loading:
+//   * Synthesis: MEM_FILE, resolved relative to the Quartus project dir
+//     (synth/), defaults to the original LED demo program.
+//   * Simulation: pass +imem=<hexfile> at runtime; the Verilator harness
+//     always does this, so programs swap without recompiling the model.
+// ============================================================================
+module imem #(
+    parameter DEPTH_WORDS = 1024,                       // 4 KB of program
+    // Default program used by Quartus builds (path relative to synth/).
+    // NOTE: keep the word "synthesis" out of trailing comments here —
+    // Quartus parses "synthesis <x>" inside comments as a pragma.
+    parameter MEM_FILE    = "../sw/demo/led_demo.hex"
+)(
+    input  wire [31:0] pc,           // byte address from Fetch stage
+    output wire [31:0] instruction   // fetched instruction
 );
 
-    // ---------------------------------------------------------
-    // Simple instruction memory using a case statement.
-    // Access is word-aligned using pc[31:2].
-    // ---------------------------------------------------------
-    always @(*) begin
-        case (pc[31:2])
+    reg [31:0] mem [0:DEPTH_WORDS-1];
 
-            // Program stored directly in logic (for FPGA demo)
-            0: instruction = 32'h00100093;   // addi x1, x0, 1
+    integer i;
+`ifdef VERILATOR
+    reg [8*256:1] hexfile;           // +imem=<path> runtime override
+`endif
 
-            1: instruction = 32'h00400113;   // addi x2, x0, 4
-            2: instruction = 32'h01C11113;   // slli x2, x2, 28 → x2 = 0x40000000
+    initial begin
+        // Pad everything with NOPs so execution past the program's end
+        // is harmless instead of X-propagation.
+        for (i = 0; i < DEPTH_WORDS; i = i + 1)
+            mem[i] = 32'h00000013;   // addi x0, x0, 0
 
-            3: instruction = 32'h001181B3;   // add x3, x3, x1
-            4: instruction = 32'h00312023;   // sw x3, 0(x2)
-
-            5: instruction = 32'hFE000AE3;   // beq x0, x0, -8 (infinite loop)
-
-            // Default → NOP (ADDI x0, x0, 0)
-            default: instruction = 32'h00000013;
-        endcase
+`ifdef VERILATOR
+        if ($value$plusargs("imem=%s", hexfile))
+            $readmemh(hexfile, mem);
+        else
+            $readmemh(MEM_FILE, mem);
+`else
+        $readmemh(MEM_FILE, mem);
+`endif
     end
+
+    // Word-aligned access: pc[1:0] ignored, upper bits alias.
+    assign instruction = mem[pc[$clog2(DEPTH_WORDS)+1:2]];
 
 endmodule

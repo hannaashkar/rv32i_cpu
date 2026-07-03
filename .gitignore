@@ -8,8 +8,8 @@ synth/output_files/
 *.rpt
 *.summary
 
-# Simulation build
-tb/verilator/obj_dir/
+# Simulation build (Verilator runs from the repo root)
+obj_dir/
 build/
 *.vcd
 *.fst
@@ -17,12 +17,13 @@ build/
 transcript
 work/
 
-# Software build
+# Software build (but keep checked-in program images like sw/demo)
 sw/**/*.o
 sw/**/*.elf
 sw/**/*.bin
 sw/**/*.hex
 sw/**/*.map
+!sw/demo/*.hex
 
 # Editor / backup noise
 *.bak

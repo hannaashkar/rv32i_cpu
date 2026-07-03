@@ -7,6 +7,20 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 
 ---
 
+## B007 — Store data is not forwarded (stale value stored) — OPEN
+
+- **Symptom:** `add x7,...` immediately followed by `sw x7, 0(x1)` stores
+  the OLD value of x7.
+- **Root cause:** The forwarding muxes only feed the ALU operands. EX/MEM
+  latches `rs2_dataE` (the raw ID/EX value) as store data, so a store's
+  data operand bypasses forwarding entirely. For SW, ALUSrc=1 selects the
+  immediate, so the forwarded `rs2_fwd_base` is computed and then unused.
+- **How caught:** Writing the first smoke test (2026-07-03) — had to
+  deliberately distance the store-data write from the SW to make the test
+  independent of this bug.
+- **Fix (planned, RV32I stage):** latch `rs2_fwd_base` instead of
+  `rs2_dataE` into EX/MEM (one-line change; needs a directed test first).
+
 ## B006 — Memories synthesize to flip-flops instead of block RAM — OPEN
 
 - **Symptom:** Fitter report (2025-12-01) shows 12,499 logic registers and
