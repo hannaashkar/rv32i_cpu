@@ -2,12 +2,15 @@ module mmio(
     input  wire        clk,
     input  wire        reset,
 
-    // Address and data signals from MEM stage
-    input  wire [31:0] addr,
-    input  wire [31:0] wdata,
-    input  wire        we,        // write-enable (from store instruction)
-
+    // Read and write ports are independently addressed (D013): the OoO
+    // core reads MMIO from the load pipe while the store queue commits.
+    // The in-order top drives both with the same MEM-stage address.
+    input  wire [31:0] raddr,
     output reg  [31:0] rdata,     // read-back data into the CPU
+
+    input  wire [31:0] waddr,
+    input  wire [31:0] wdata,
+    input  wire        we,        // write-enable (committed store)
 
     // Physical FPGA hardware
     output reg  [9:0]  leds,      // LED register (writeable)
@@ -25,7 +28,7 @@ module mmio(
         if (reset) begin
             leds <= 10'b0;
         end else begin
-            if (we && addr == 32'h40000000) begin
+            if (we && waddr == 32'h40000000) begin
                 leds <= wdata[9:0];
             end
         end
@@ -39,9 +42,9 @@ module mmio(
     // Anything else → return zero
     // ---------------------------------------------------------
     always @(*) begin
-        if (addr == 32'h40000000) begin
+        if (raddr == 32'h40000000) begin
             rdata = {22'b0, leds};        // zero-extend LED bits
-        end else if (addr == 32'h40000004) begin
+        end else if (raddr == 32'h40000004) begin
             rdata = {22'b0, switches};    // zero-extend switch bits
         end else begin
             rdata = 32'b0;                // unmapped address

@@ -42,10 +42,12 @@ module cpu_pipeline (
         .pc     (pcF)
     );
 
-    // Instruction memory
+    // Instruction memory (second fetch port unused in the in-order core)
     imem IMEM0 (
-        .pc         (pcF),
-        .instruction(instrF)
+        .pc          (pcF),
+        .instruction (instrF),
+        .pc2         (32'b0),
+        .instruction2()
     );
 
     // Sequential next PC (default fall-through)
@@ -350,7 +352,7 @@ module cpu_pipeline (
         .rs1_data (rs1_fwdE),
         .csr_rdata(csr_rdataE),
 
-        .retire   (validW)
+        .retire_n ({1'b0, validW})
     );
 
     // EX result: old CSR value for CSR ops, link value (pc+4) for jumps,
@@ -500,15 +502,17 @@ module cpu_pipeline (
     wire [31:0] ram_read_dataM;
     wire [31:0] mmio_read_dataM;
 
-    // Data memory (used for normal load/store instructions)
+    // Data memory: read and write ports carry the same MEM-stage access
     dmem DMEM0 (
         .clk        (clk),
         .mem_read   (MemReadM  & ~is_ioM),  // only access RAM when not IO
+        .raddr      (alu_resultM),
+        .rfunct3    (funct3M),              // access size + sign extension
+        .read_data  (ram_read_dataM),
         .mem_write  (MemWriteM & ~is_ioM),  // only write RAM when not IO
-        .addr       (alu_resultM),
+        .waddr      (alu_resultM),
         .write_data (rs2_dataM),
-        .funct3     (funct3M),              // access size + sign extension
-        .read_data  (ram_read_dataM)
+        .wfunct3    (funct3M)
     );
 
     // MMIO block for LEDs and switches
@@ -517,10 +521,11 @@ module cpu_pipeline (
     mmio MMIO0 (
         .clk      (clk),
         .reset    (reset),
-        .addr     (alu_resultM),
+        .raddr    (alu_resultM),
+        .rdata    (mmio_read_dataM),
+        .waddr    (alu_resultM),
         .wdata    (rs2_dataM),
         .we       (MemWriteM & is_ioM),     // write only when targeting IO region
-        .rdata    (mmio_read_dataM),
 
         .leds     (leds_mmio),
         .switches (switches)

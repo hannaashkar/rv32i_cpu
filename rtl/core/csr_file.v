@@ -36,8 +36,9 @@ module csr_file (
     input  wire [31:0] rs1_data,   // forwarded rs1 (register forms)
     output reg  [31:0] csr_rdata,  // old CSR value -> rd via EX result mux
 
-    // Retirement strobe from WB (a valid instruction leaves the pipeline)
-    input  wire        retire
+    // Retired-instruction count this cycle (0..2 — the OoO core retires
+    // up to 2/cycle; the in-order core passes {1'b0, validW})
+    input  wire [1:0]  retire_n
 );
 
     // CSR addresses (RISC-V privileged spec)
@@ -96,8 +97,7 @@ module csr_file (
             mscratch    <= 32'b0;
         end else begin
             cycle_cnt <= cycle_cnt + 64'd1;
-            if (retire)
-                instret_cnt <= instret_cnt + 64'd1;
+            instret_cnt <= instret_cnt + {62'b0, retire_n};
 
             // Architectural writes. The counter CSRs (0xCxx) are read-only
             // by spec — a write there is dropped today and will trap once

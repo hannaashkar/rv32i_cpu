@@ -5,6 +5,36 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D013 — 2026-07-03 — 2-wide OoO microarchitecture (executed under the
+## "all done" directive; decided by Claude, documented for review)
+
+Full spec in docs/OOO.md. The five structural choices and their
+alternatives:
+
+1. **Rename: merged PRF (R10K)** over P6 values-in-ROB. One value copy,
+   no ARF write traffic, the scheme modern cores use (interview value);
+   costs a free list and freeing discipline. 64 physregs = 32 arch + 32
+   in-flight (matches ROB depth, so renaming never starves before the
+   ROB fills).
+2. **Recovery: per-branch RAT checkpoints (8)** over ROB-walk (slow,
+   variable latency) or retire-time RRAT squash (adds resolve-to-retire
+   latency to every mispredict). A checkpoint is only ~220 bits on FPGA
+   FFs; 8 in flight covers CoreMark's branch density. Checkpoints are
+   freed at retire, so out-of-order branch resolution needs no special
+   casing — nested restores always land on live older checkpoints.
+3. **Issue: unified 16-entry queue** with select ≤3 (port-bound: ALU+br,
+   ALU+CSR, mem) over split queues (more tuning knobs, more logic).
+   Select-time tag broadcast for 1-cycle ops gives back-to-back
+   dependents; loads broadcast at writeback because they can replay.
+4. **Loads: conservative disambiguation** — issue only past
+   known-address older stores, forward only exact full-word matches,
+   replay past partial overlaps. Costs IPC vs speculative loads +
+   store-sets, but eliminates the LQ, memory-order violations, and the
+   replay-storm class of bugs. The LQ returns with speculation as its
+   own measured stage.
+5. **Stores commit at retire** (≤1/cycle) — keeps all MMIO side effects
+   non-speculative for free.
+
 ## D012 — 2026-07-03 — Full Zicsr scaffold + pipeline valid bit for instret
 
 Two coupled choices for the measurement CSRs (rdcycle/rdinstret). (1) CSR
