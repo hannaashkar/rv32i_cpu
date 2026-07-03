@@ -5,6 +5,27 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D012 — 2026-07-03 — Full Zicsr scaffold + pipeline valid bit for instret
+
+Two coupled choices for the measurement CSRs (rdcycle/rdinstret). (1) CSR
+scope: Hanna chose a **full Zicsr scaffold** — a `csr_file` module with
+generic address decode and all six instruction forms (CSRRW/S/C, register
+and immediate) — over a counters-only read path. Costs more decode and
+test surface now, but mstatus/mtvec/mepc slot into the same case statement
+when traps arrive, with no datapath rework. mscratch is implemented as the
+first writable CSR so the write path is tested logic rather than dead
+scaffolding; counter CSRs are read-only (writes dropped until traps can be
+raised). (2) Retirement counting: Hanna chose a **1-bit valid flag**
+flowing IF→WB through the pipeline registers (flushes/bubbles clear it;
+instret increments when a valid instruction reaches WB) over a
+count-non-NOPs heuristic, which would miscount real NOPs in compiled code
+— noise in the exact number (IPC) this stage exists to produce. The valid
+bit is also groundwork the OoO core needs regardless. Placement: CSR ops
+execute in EX (read + write commit there) — safe because nothing that
+reaches EX can be killed in this pipeline (no traps; mispredicts flush
+only IF/ID + ID/EX), and the read value returns through the existing EX
+result mux so forwarding needs no changes.
+
 ## D011 — 2026-07-03 — B007 fix: latch forwarded store data only (F1)
 
 EX/MEM will capture `rs2_fwd_base` (the forwarded rs2) instead of raw

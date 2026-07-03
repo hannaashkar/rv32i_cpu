@@ -129,6 +129,19 @@ int main(int argc, char** argv) {
         }
     }
 
+    // Performance summary straight from the hardware counters (csr_file):
+    // the same cycle/instret values software sees via rdcycle/rdinstret,
+    // so IPC printed here matches on-core measurement exactly.
+    {
+        auto* r = top->rootp;
+        uint64_t hw_cycles  = r->cpu_pipeline__DOT__CSR0__DOT__cycle_cnt;
+        uint64_t hw_instret = r->cpu_pipeline__DOT__CSR0__DOT__instret_cnt;
+        printf("[sim] perf: cycles=%llu instret=%llu ipc=%.3f\n",
+               (unsigned long long)hw_cycles,
+               (unsigned long long)hw_instret,
+               hw_cycles ? (double)hw_instret / (double)hw_cycles : 0.0);
+    }
+
     if (cycle >= max_cycles) {
         auto* r = top->rootp;
         printf("[sim] TIMEOUT after %llu cycles (pc=0x%08x) — "

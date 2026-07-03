@@ -17,6 +17,8 @@ module id_ex_reg (
     input        Branch_in,
     input        Jal_in,      // unconditional jump, target = pc+imm
     input        Jalr_in,     // unconditional jump, target = rs1+imm
+    input        Csr_in,      // CSR instruction (Zicsr, D012)
+    input        valid_in,    // architecturally real instruction (D012)
     input  [2:0] ALUOp_in,
 
     // -------------------------------
@@ -48,6 +50,8 @@ module id_ex_reg (
     output reg        Branch_out,
     output reg        Jal_out,
     output reg        Jalr_out,
+    output reg        Csr_out,
+    output reg        valid_out,
     output reg [2:0]  ALUOp_out,
 
     output reg [31:0] pc_out,
@@ -81,6 +85,8 @@ module id_ex_reg (
             Branch_out        <= 0;
             Jal_out           <= 0;
             Jalr_out          <= 0;
+            Csr_out           <= 0;
+            valid_out         <= 0;
             ALUOp_out         <= 0;
 
             pc_out            <= 0;
@@ -99,7 +105,9 @@ module id_ex_reg (
         end else if (flush) begin
             // -------------------------------------------------
             // Pipeline flush: insert a bubble into EX stage
-            // Used for load-use hazards or branch misprediction
+            // Used for load-use hazards or branch misprediction.
+            // Csr=0 kills any pending CSR side effect; valid=0 keeps
+            // the bubble out of the instret count (D012).
             // -------------------------------------------------
             RegWrite_out      <= 0;
             MemRead_out       <= 0;
@@ -110,6 +118,8 @@ module id_ex_reg (
             Branch_out        <= 0;
             Jal_out           <= 0;
             Jalr_out          <= 0;
+            Csr_out           <= 0;
+            valid_out         <= 0;
             ALUOp_out         <= 0;
 
             pc_out            <= 0;
@@ -138,6 +148,8 @@ module id_ex_reg (
             Branch_out        <= Branch_in;
             Jal_out           <= Jal_in;
             Jalr_out          <= Jalr_in;
+            Csr_out           <= Csr_in;
+            valid_out         <= valid_in;
             ALUOp_out         <= ALUOp_in;
 
             pc_out            <= pc_in;

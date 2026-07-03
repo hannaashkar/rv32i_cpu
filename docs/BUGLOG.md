@@ -137,9 +137,10 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 - **Spurious hazards from immediate bits:** the hazard/forwarding units
   compare the rs1/rs2 *fields* of every instruction, including formats
   where those bits are immediate data (e.g. I-type rs2 field, LUI rs1
-  field). Worst case is an unnecessary 1-cycle load-use stall — a small
-  IPC leak, never a correctness issue. Fix by decoding rs1/rs2-valid
-  flags; measure the IPC delta when CoreMark runs.
+  field, and — since D012 — the zimm of CSRRWI/CSRRSI/CSRRCI, which lives
+  in the rs1 field). Worst case is an unnecessary 1-cycle load-use stall —
+  a small IPC leak, never a correctness issue. Fix by decoding
+  rs1/rs2-valid flags; measure the IPC delta when CoreMark runs.
 - **MMIO registers are word-access-only:** sub-word loads/stores to
   0x4xxxxxxx bypass the dmem lane logic and hit the raw MMIO registers.
   C code must use `volatile uint32_t*` for MMIO (normal practice).

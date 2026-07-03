@@ -55,6 +55,15 @@ module cpu_pipeline (
     wire [31:0] pcD;
     wire [31:0] instrD;
 
+    // Valid bits (decision D012): mark architecturally real instructions
+    // as they flow down the pipe. Flushes and bubbles carry valid=0, so
+    // the instret counter sees exactly the retired program, not the
+    // pipeline's stalls and wrong-path slots.
+    wire validD;
+    wire validE;
+    wire validM;
+    wire validW /*verilator public_flat_rd*/;
+
     if_id_reg IFID0 (
         .clk           (clk),
         .reset         (reset),
@@ -65,6 +74,7 @@ module cpu_pipeline (
 
         .id_pc         (pcD),
         .id_instruction(instrD),
+        .id_valid      (validD),
 
         // Propagate predictor info into Decode
         .pred_takenF(pred_takenF),
@@ -95,11 +105,13 @@ module cpu_pipeline (
     wire       BranchD;
     wire       JalD;
     wire       JalrD;
+    wire       CsrD;
     wire [2:0] ALUOpD;
 
-    // Control unit (opcode-level decoding)
+    // Control unit (opcode-level decoding; funct3 only sub-decodes SYSTEM)
     control CU (
         .opcode   (opcodeD),
+        .funct3   (funct3D),
         .RegWrite (RegWriteD),
         .MemRead  (MemReadD),
         .MemWrite (MemWriteD),
@@ -109,6 +121,7 @@ module cpu_pipeline (
         .Branch   (BranchD),
         .Jal      (JalD),
         .Jalr     (JalrD),
+        .Csr      (CsrD),
         .ALUOp    (ALUOpD)
     );
 
@@ -159,6 +172,7 @@ module cpu_pipeline (
     wire       BranchE /*verilator public_flat_rd*/;
     wire       JalE;
     wire       JalrE;
+    wire       CsrE;
     wire [2:0] ALUOpE;
 
     wire [31:0] pcE /*verilator public_flat_rd*/;
@@ -188,6 +202,8 @@ module cpu_pipeline (
         .Branch_in   (BranchD),
         .Jal_in      (JalD),
         .Jalr_in     (JalrD),
+        .Csr_in      (CsrD),
+        .valid_in    (validD),
         .ALUOp_in    (ALUOpD),
 
         // Operands and instruction fields
@@ -211,6 +227,8 @@ module cpu_pipeline (
         .Branch_out  (BranchE),
         .Jal_out     (JalE),
         .Jalr_out    (JalrE),
+        .Csr_out     (CsrE),
+        .valid_out   (validE),
         .ALUOp_out   (ALUOpE),
 
         .pc_out      (pcE),
@@ -310,8 +328,35 @@ module cpu_pipeline (
     wire [31:0] actual_targetE = JalrE ? (alu_resultE & ~32'h1)
                                        : branch_targetE;
 
-    // EX result: link value (pc+4) for jumps, ALU result otherwise
-    wire [31:0] ex_resultE = jumpE ? pc_plus4E : alu_resultE;
+    // ======================================================
+    // CSR file (Zicsr — decision D012)
+    // ======================================================
+    // CSR ops execute here in EX: nothing that reached EX can be killed
+    // (mispredicts only flush IF/ID + ID/EX), so the CSR write commits
+    // non-speculatively. The CSR address arrives on the I-type immediate
+    // bus (instr[31:20] == immE[11:0]); rs1E doubles as the zimm for the
+    // immediate forms. instret advances on validW = a real instruction
+    // (not a bubble or flushed slot) leaving WB.
+    wire [31:0] csr_rdataE;
+
+    csr_file CSR0 (
+        .clk      (clk),
+        .reset    (reset),
+
+        .csr_en   (CsrE),
+        .csr_addr (immE[11:0]),
+        .funct3   (funct3E),
+        .rs1_addr (rs1E),
+        .rs1_data (rs1_fwdE),
+        .csr_rdata(csr_rdataE),
+
+        .retire   (validW)
+    );
+
+    // EX result: old CSR value for CSR ops, link value (pc+4) for jumps,
+    // ALU result otherwise
+    wire [31:0] ex_resultE = CsrE  ? csr_rdataE :
+                             jumpE ? pc_plus4E  : alu_resultE;
 
     // ======================================================
     // Branch Predictor (BHT + BTB)
@@ -381,6 +426,7 @@ module cpu_pipeline (
         .MemWrite_in      (MemWriteE),
         .MemToReg_in      (MemToRegE),
         .Branch_in        (BranchE),
+        .valid_in         (validE),
 
         // Data signals. ex_resultE = pc+4 for jumps (link value), ALU
         // result otherwise — so jump links forward like any ALU result.
@@ -400,6 +446,7 @@ module cpu_pipeline (
         .MemWrite_out     (MemWriteM),
         .MemToReg_out     (MemToRegM),
         .Branch_out       (BranchM),
+        .valid_out        (validM),
 
         .alu_result_out   (alu_resultM),
         .rs2_data_out     (rs2_dataM),
@@ -496,6 +543,7 @@ module cpu_pipeline (
         // Control
         .RegWrite_in   (RegWriteM),
         .MemToReg_in   (MemToRegM),
+        .valid_in      (validM),
 
         // Data
         .mem_data_in   (dmem_read_dataM),
@@ -505,6 +553,7 @@ module cpu_pipeline (
         // Outputs to WB
         .RegWrite_out  (RegWriteW),
         .MemToReg_out  (MemToRegW),
+        .valid_out     (validW),
         .mem_data_out  (mem_dataW),
         .alu_result_out(alu_resultW),
         .rd_out        (rdW)

@@ -13,6 +13,7 @@ module mem_wb_reg (
     // Control & data coming from MEM stage
     input        RegWrite_in,
     input        MemToReg_in,
+    input        valid_in,        // real instruction — drives instret (D012)
     input [31:0] mem_data_in,     // data read from memory (loads)
     input [31:0] alu_result_in,   // ALU result for ALU instructions
     input [4:0]  rd_in,           // destination register
@@ -20,6 +21,7 @@ module mem_wb_reg (
     // Outputs into WB stage
     output reg        RegWrite_out,
     output reg        MemToReg_out,
+    output reg        valid_out,
     output reg [31:0] mem_data_out,
     output reg [31:0] alu_result_out,
     output reg [4:0]  rd_out
@@ -33,12 +35,14 @@ module mem_wb_reg (
         if (reset) begin
             RegWrite_out   <= 0;
             MemToReg_out   <= 0;
+            valid_out      <= 0;
             mem_data_out   <= 0;
             alu_result_out <= 0;
             rd_out         <= 0;
         end else begin
             RegWrite_out   <= RegWrite_in;
             MemToReg_out   <= MemToReg_in;
+            valid_out      <= valid_in;
             mem_data_out   <= mem_data_in;
             alu_result_out <= alu_result_in;
             rd_out         <= rd_in;
