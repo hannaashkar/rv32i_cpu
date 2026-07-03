@@ -34,3 +34,4 @@ sw/coremark/.cm_flags_stamp
 
 # Session bookkeeping (not project content)
 .remember/
+obj_dir_ooo/

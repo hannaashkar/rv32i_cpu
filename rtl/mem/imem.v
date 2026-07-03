@@ -29,7 +29,11 @@ module imem #(
     parameter MEM_FILE    = "../sw/demo/led_demo.hex"
 )(
     input  wire [31:0] pc,           // byte address from Fetch stage
-    output wire [31:0] instruction   // fetched instruction
+    output wire [31:0] instruction,  // fetched instruction
+    // Second fetch port for the 2-wide OoO frontend (D013). The in-order
+    // top ties pc2 to 0 and leaves instruction2 unconnected (pruned).
+    input  wire [31:0] pc2,
+    output wire [31:0] instruction2
 );
 
     reg [31:0] mem [0:DEPTH_WORDS-1];
@@ -56,6 +60,7 @@ module imem #(
     end
 
     // Word-aligned access: pc[1:0] ignored, upper bits alias.
-    assign instruction = mem[pc[$clog2(DEPTH_WORDS)+1:2]];
+    assign instruction  = mem[pc[$clog2(DEPTH_WORDS)+1:2]];
+    assign instruction2 = mem[pc2[$clog2(DEPTH_WORDS)+1:2]];
 
 endmodule

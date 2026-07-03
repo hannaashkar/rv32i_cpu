@@ -28,18 +28,26 @@ module dmem #(
     parameter DEPTH_WORDS = 256        // 1 KB on the FPGA (FF-based today)
 `endif
 )(
+    // Read and write ports are independently addressed so the OoO core
+    // can execute a load while the store queue commits an older store
+    // (D013). The in-order top drives both with the same MEM-stage
+    // address, preserving its original behavior exactly.
     input  wire        clk,
-    input  wire        mem_read,       // read enable from control unit
-    input  wire        mem_write,      // write enable from control unit
-    input  wire [31:0] addr,           // byte address from the ALU
-    input  wire [31:0] write_data,     // rs2 (forwarded), LSB-justified
-    input  wire [2:0]  funct3,         // access size + sign (RV32I encoding)
-    output reg  [31:0] read_data       // extracted + extended load data
+    input  wire        mem_read,       // read enable
+    input  wire [31:0] raddr,          // load byte address
+    input  wire [2:0]  rfunct3,        // load size + sign (RV32I encoding)
+    output reg  [31:0] read_data,      // extracted + extended load data
+
+    input  wire        mem_write,      // write enable
+    input  wire [31:0] waddr,          // store byte address
+    input  wire [31:0] write_data,     // rs2, LSB-justified
+    input  wire [2:0]  wfunct3         // store size
 );
 
     reg [31:0] memory [0:DEPTH_WORDS-1];
 
-    wire [$clog2(DEPTH_WORDS)-1:0] widx = addr[$clog2(DEPTH_WORDS)+1:2];
+    wire [$clog2(DEPTH_WORDS)-1:0] ridx = raddr[$clog2(DEPTH_WORDS)+1:2];
+    wire [$clog2(DEPTH_WORDS)-1:0] widx = waddr[$clog2(DEPTH_WORDS)+1:2];
 
 `ifdef VERILATOR
     reg [8*256:1] hexfile;             // +dmem=<path> data image
@@ -57,15 +65,15 @@ module dmem #(
     // and sign/zero extend according to funct3.
     //   000 LB   001 LH   010 LW   100 LBU   101 LHU
     // ------------------------------------------------------
-    wire [31:0] rword = memory[widx];
-    wire [7:0]  rbyte = rword[addr[1:0]*8 +: 8];
-    wire [15:0] rhalf = rword[addr[1]*16 +: 16];
+    wire [31:0] rword = memory[ridx];
+    wire [7:0]  rbyte = rword[raddr[1:0]*8 +: 8];
+    wire [15:0] rhalf = rword[raddr[1]*16 +: 16];
 
     always @(*) begin
         if (!mem_read)
             read_data = 32'b0;
         else begin
-            case (funct3)
+            case (rfunct3)
                 3'b000:  read_data = {{24{rbyte[7]}},  rbyte};  // LB
                 3'b001:  read_data = {{16{rhalf[15]}}, rhalf};  // LH
                 3'b100:  read_data = {24'b0, rbyte};            // LBU
@@ -81,9 +89,9 @@ module dmem #(
     // ------------------------------------------------------
     always @(posedge clk) begin
         if (mem_write) begin
-            case (funct3[1:0])
-                2'b00:   memory[widx][addr[1:0]*8 +: 8]  <= write_data[7:0];
-                2'b01:   memory[widx][addr[1]*16 +: 16]  <= write_data[15:0];
+            case (wfunct3[1:0])
+                2'b00:   memory[widx][waddr[1:0]*8 +: 8] <= write_data[7:0];
+                2'b01:   memory[widx][waddr[1]*16 +: 16] <= write_data[15:0];
                 default: memory[widx]                    <= write_data;
             endcase
         end

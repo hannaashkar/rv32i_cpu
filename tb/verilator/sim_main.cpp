@@ -25,8 +25,22 @@
 #include <memory>
 #include <deque>
 
+// Two cores share this harness: the in-order cpu_pipeline (default) and
+// the 2-wide OoO ooo_cpu (-DOOO_TOP, built into obj_dir_ooo). The OoO
+// core retires up to two instructions per cycle and commits stores from
+// its store queue with a delay, so its lockstep uses a two-FIFO stream
+// compare instead of the in-order core's queue-at-MEM scheme.
+#ifdef OOO_TOP
+#include "Vooo_cpu.h"
+#include "Vooo_cpu___024root.h"
+typedef Vooo_cpu TopModel;
+#define CORE(x) (r->ooo_cpu__DOT__##x)
+#else
 #include "Vcpu_pipeline.h"
 #include "Vcpu_pipeline___024root.h"
+typedef Vcpu_pipeline TopModel;
+#define CORE(x) (r->cpu_pipeline__DOT__##x)
+#endif
 #include "verilated.h"
 #include "verilated_fst_c.h"
 
@@ -45,7 +59,7 @@ int main(int argc, char** argv) {
     auto ctx = std::make_unique<VerilatedContext>();
     ctx->commandArgs(argc, argv);
 
-    auto top = std::make_unique<Vcpu_pipeline>(ctx.get());
+    auto top = std::make_unique<TopModel>(ctx.get());
 
     // --- runtime options -----------------------------------------------
     uint64_t max_cycles = 100000;
@@ -102,6 +116,7 @@ int main(int argc, char** argv) {
     }
     struct StoreEvt { uint32_t addr, data, funct3; };
     std::deque<StoreEvt> rtl_stores;
+    std::deque<StoreEvt> iss_stores;   // OoO: stream-compared vs commits
     uint64_t compared = 0;
 
     uint64_t t = 0;  // trace timestamp (half-cycles)
@@ -124,8 +139,92 @@ int main(int argc, char** argv) {
         half_tick(0);
         half_tick(1);
 
-        // Watch the MEM stage for the magic exit store.
         auto* r = top->rootp;
+
+#ifdef OOO_TOP
+        // ---- OoO core: snoop the SQ commit port ------------------------
+        if (CORE(mw_valid)) {
+            if (CORE(mw_addr) == MAGIC_PUTC_ADDR) {
+                putchar((int)(CORE(mw_data) & 0xFF));
+                fflush(stdout);
+            }
+            if (lockstep)   // magic stores compared too — ISS emits them
+                rtl_stores.push_back({CORE(mw_addr), CORE(mw_data),
+                                      CORE(mw_f3)});
+        }
+
+        if (lockstep) {
+            for (int slot = 0; slot < 2; ++slot) {
+                const bool     v    = slot ? CORE(ret1_v)   : CORE(ret0_v);
+                if (!v) break;
+                const uint32_t rpc  = slot ? CORE(ret1_pc)  : CORE(ret0_pc);
+                const uint32_t rrd  = slot ? CORE(ret1_rd)  : CORE(ret0_rd);
+                const uint32_t rval = slot ? CORE(ret1_val) : CORE(ret0_val);
+                const bool     rwr  = (slot ? CORE(ret1_wr) : CORE(ret0_wr))
+                                      && rrd != 0;
+                iss->step(rval);
+                const auto& e = iss->eff;
+                bool bad = false;
+                if (rpc != e.pc) bad = true;
+                if (rwr != e.wrote_rd) bad = true;
+                if (rwr && e.wrote_rd && (rrd != e.rd || rval != e.rd_val))
+                    bad = true;
+                if (e.is_store)
+                    iss_stores.push_back({e.st_addr, e.st_data,
+                                          e.st_funct3});
+                if (bad) {
+                    printf("\n[lockstep] MISMATCH at cycle %llu slot %d "
+                           "(%llu instructions compared)\n",
+                           (unsigned long long)cycle, slot,
+                           (unsigned long long)compared);
+                    printf("  RTL: pc=0x%08x rd=x%u wr=%d val=0x%08x\n",
+                           rpc, rrd, (int)rwr, rval);
+                    printf("  ISS: pc=0x%08x rd=x%u wr=%d val=0x%08x "
+                           "instr=0x%08x\n",
+                           e.pc, e.rd, (int)e.wrote_rd, e.rd_val, e.instr);
+                    if (tfp) tfp->close();
+                    top->final();
+                    return 3;
+                }
+                ++compared;
+            }
+            // drain matching store pairs (commit lags retire; two FIFOs
+            // absorb the skew)
+            while (!rtl_stores.empty() && !iss_stores.empty()) {
+                const StoreEvt a = rtl_stores.front(); rtl_stores.pop_front();
+                const StoreEvt b = iss_stores.front(); iss_stores.pop_front();
+                if (a.addr != b.addr || a.data != b.data
+                    || (a.funct3 & 3) != (b.funct3 & 3)) {
+                    printf("\n[lockstep] STORE MISMATCH at cycle %llu "
+                           "(%llu instructions compared)\n",
+                           (unsigned long long)cycle,
+                           (unsigned long long)compared);
+                    printf("  RTL: [0x%08x] <= 0x%08x (f3=%u)\n",
+                           a.addr, a.data, a.funct3);
+                    printf("  ISS: [0x%08x] <= 0x%08x (f3=%u)\n",
+                           b.addr, b.data, b.funct3);
+                    if (tfp) tfp->close();
+                    top->final();
+                    return 3;
+                }
+            }
+        }
+
+        if (CORE(mw_valid) && CORE(mw_addr) == MAGIC_EXIT_ADDR) {
+            uint32_t code = CORE(mw_data);
+            if (code == 1) {
+                printf("[sim] PASS after %llu cycles\n",
+                       (unsigned long long)cycle);
+                exit_code = 0;
+            } else {
+                printf("[sim] FAIL (code %u) after %llu cycles\n",
+                       code, (unsigned long long)cycle);
+                exit_code = 1;
+            }
+            break;
+        }
+#else
+        // ---- in-order core --------------------------------------------
         if (verbose && r->cpu_pipeline__DOT__BranchE)
             printf("[sim] cycle %llu: branch pcE=0x%08x rs1=0x%08x rs2=0x%08x "
                    "zero=%d mispredict=%d\n",
@@ -223,6 +322,7 @@ int main(int argc, char** argv) {
             }
             break;
         }
+#endif
     }
 
     if (lockstep)
@@ -234,8 +334,8 @@ int main(int argc, char** argv) {
     // so IPC printed here matches on-core measurement exactly.
     {
         auto* r = top->rootp;
-        uint64_t hw_cycles  = r->cpu_pipeline__DOT__CSR0__DOT__cycle_cnt;
-        uint64_t hw_instret = r->cpu_pipeline__DOT__CSR0__DOT__instret_cnt;
+        uint64_t hw_cycles  = CORE(CSR0__DOT__cycle_cnt);
+        uint64_t hw_instret = CORE(CSR0__DOT__instret_cnt);
         printf("[sim] perf: cycles=%llu instret=%llu ipc=%.3f\n",
                (unsigned long long)hw_cycles,
                (unsigned long long)hw_instret,
@@ -247,7 +347,7 @@ int main(int argc, char** argv) {
         printf("[sim] TIMEOUT after %llu cycles (pc=0x%08x) — "
                "no store to 0x%08x seen\n",
                (unsigned long long)max_cycles,
-               r->cpu_pipeline__DOT__pcF, MAGIC_EXIT_ADDR);
+               CORE(pcF), MAGIC_EXIT_ADDR);
         exit_code = 2;
     }
 
