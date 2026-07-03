@@ -17,6 +17,7 @@ module mem_wb_reg (
     input [31:0] mem_data_in,     // data read from memory (loads)
     input [31:0] alu_result_in,   // ALU result for ALU instructions
     input [4:0]  rd_in,           // destination register
+    input [31:0] pc_in,           // observability for lockstep co-sim
 
     // Outputs into WB stage
     output reg        RegWrite_out,
@@ -24,7 +25,8 @@ module mem_wb_reg (
     output reg        valid_out,
     output reg [31:0] mem_data_out,
     output reg [31:0] alu_result_out,
-    output reg [4:0]  rd_out
+    output reg [4:0]  rd_out,
+    output reg [31:0] pc_out
 );
 
     // ---------------------------------------------------------
@@ -39,6 +41,7 @@ module mem_wb_reg (
             mem_data_out   <= 0;
             alu_result_out <= 0;
             rd_out         <= 0;
+            pc_out         <= 0;
         end else begin
             RegWrite_out   <= RegWrite_in;
             MemToReg_out   <= MemToReg_in;
@@ -46,6 +49,7 @@ module mem_wb_reg (
             mem_data_out   <= mem_data_in;
             alu_result_out <= alu_result_in;
             rd_out         <= rd_in;
+            pc_out         <= pc_in;
         end
     end
 

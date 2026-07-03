@@ -21,6 +21,8 @@ module ex_mem_reg (
     input [31:0] branch_target_in,    // computed branch target
     input [4:0]  rd_in,               // destination register ID
     input [2:0]  funct3_in,           // access size/sign for MEM (loads/stores)
+    input [31:0] pc_in,               // observability: lockstep co-sim compares
+                                      // retirement PCs (pruned in synthesis)
 
     // -----------------------------
     // Outputs into MEM stage
@@ -37,7 +39,8 @@ module ex_mem_reg (
     output reg        zero_out,
     output reg [31:0] branch_target_out,
     output reg [4:0]  rd_out,
-    output reg [2:0]  funct3_out
+    output reg [2:0]  funct3_out,
+    output reg [31:0] pc_out
 );
 
     // ---------------------------------------------------------
@@ -60,6 +63,7 @@ module ex_mem_reg (
             branch_target_out <= 0;
             rd_out            <= 0;
             funct3_out        <= 0;
+            pc_out            <= 0;
         end else begin
             // Capture control signals
             RegWrite_out      <= RegWrite_in;
@@ -76,6 +80,7 @@ module ex_mem_reg (
             branch_target_out <= branch_target_in;
             rd_out            <= rd_in;
             funct3_out        <= funct3_in;
+            pc_out            <= pc_in;
         end
     end
 

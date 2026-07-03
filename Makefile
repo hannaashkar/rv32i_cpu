@@ -75,7 +75,7 @@ all: test
 # --- simulator build ----------------------------------------------------------
 sim: $(SIM_BIN)
 
-$(SIM_BIN): $(RTL_SRCS) $(SIM_MAIN)
+$(SIM_BIN): $(RTL_SRCS) $(SIM_MAIN) tb/verilator/iss.h
 	$(VERILATOR) $(VFLAGS) $(RTL_SRCS) $(SIM_MAIN) -o V$(TOP)
 
 # --- software build ------------------------------------------------------------
