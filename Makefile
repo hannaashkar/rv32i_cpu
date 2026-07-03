@@ -26,8 +26,9 @@ QUARTUS_MAP   ?= /c/intelfpga_lite/20.1/quartus/bin64/quartus_map.exe
 
 # --- design ------------------------------------------------------------------
 TOP       := cpu_pipeline
-RTL_DIRS  := rtl/core rtl/mem rtl/soc rtl/ooo
-RTL_SRCS  := $(wildcard rtl/core/*.v) $(wildcard rtl/mem/*.v) $(wildcard rtl/soc/*.v)
+RTL_DIRS  := rtl/core rtl/mem rtl/soc rtl/ooo rtl/npu
+RTL_SRCS  := $(wildcard rtl/core/*.v) $(wildcard rtl/mem/*.v) \
+             $(wildcard rtl/soc/*.v) $(wildcard rtl/npu/*.v)
 OOO_SRCS  := $(wildcard rtl/ooo/*.v)
 SIM_MAIN  := tb/verilator/sim_main.cpp
 SIM_BIN   := obj_dir/V$(TOP)
@@ -63,7 +64,8 @@ SW_TESTS  := $(patsubst %.S,%.hex,$(wildcard sw/tests/*.S))
 # -lgcc supplies __mulsi3/__divsi3 etc. (rv32i has no hardware M extension)
 CRT0     := sw/common/crt0.S
 LIBMIN   := sw/common/libmin.c
-SW_CDEPS := $(CRT0) $(LIBMIN) sw/common/rv32.h sw/common/link.ld
+SW_CDEPS := $(CRT0) $(LIBMIN) sw/common/rv32.h sw/common/npu.h \
+            sw/common/link.ld
 CFLAGS_C := $(SW_CFLAGS) -O2 -ffreestanding -Wall
 CTESTS   := $(wildcard sw/ctests/*.c)
 CTEST_HEX := $(patsubst %.c,%.text.hex,$(CTESTS)) \
@@ -92,6 +94,22 @@ $(SIM_BIN_OOO): $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) tb/verilator/iss.h
 	$(VERILATOR) $(VFLAGS) --top-module $(OOO_TOP) --Mdir obj_dir_ooo \
 	    -CFLAGS -DOOO_TOP \
 	    $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) -o V$(OOO_TOP)
+
+# --- NPU unit testbench (docs/NPU.md) -----------------------------------------
+# Standalone Verilator build of npu_top vs a C++ golden tile model.
+NPU_TB := obj_dir_npu/Vnpu_top
+NPU_SRCS := rtl/npu/npu_pe.v rtl/npu/npu_array.v rtl/npu/npu_top.v
+
+$(NPU_TB): $(NPU_SRCS) tb/verilator/npu_tb.cpp
+	$(VERILATOR) --cc --exe --build -j 0 --top-module npu_top \
+	    --Mdir obj_dir_npu -Wno-fatal \
+	    -MAKEFLAGS OPT_FAST=-O2 -MAKEFLAGS OPT_SLOW=-O2 \
+	    -MAKEFLAGS OPT_GLOBAL=-O2 -MAKEFLAGS VM_PARALLEL_BUILDS=1 \
+	    $(NPU_SRCS) tb/verilator/npu_tb.cpp -o Vnpu_top
+
+npu-tb: $(NPU_TB)
+	./$(NPU_TB)
+.PHONY: npu-tb
 
 # --- software build ------------------------------------------------------------
 sw: $(SW_TESTS)
@@ -176,6 +194,24 @@ coremark: $(RUN_BIN) $(CM_DIR)/coremark.text.hex $(CM_DIR)/coremark.data.hex
 	    && echo "coremark: CRCs match official 2K performance-run values" \
 	    || { echo "coremark: CRC MISMATCH — computation is wrong"; exit 1; }
 
+# --- quantized MNIST MLP on the NPU (docs/NPU.md, D014/D015) ------------------
+# weights.h is generated offline by scripts/train_mlp.py (numpy, seeded).
+# PASS = soft/NPU logits bit-exact + predictions match the offline integer
+# reference; the printed cycle counts are the measured speedup.
+MLP_DIR := sw/npu_mlp
+
+$(MLP_DIR)/mlp.elf: $(MLP_DIR)/mlp.c $(MLP_DIR)/weights.h sw/common/npu.h \
+                    $(SW_CDEPS)
+	$(RISCV_GCC) $(CFLAGS_C) -o $@ $(CRT0) $(LIBMIN) $< -lgcc
+.PRECIOUS: $(MLP_DIR)/mlp.elf
+
+npu-mlp: $(RUN_BIN) $(MLP_DIR)/mlp.text.hex $(MLP_DIR)/mlp.data.hex
+	./$(RUN_BIN) +imem=$(MLP_DIR)/mlp.text.hex \
+	    +dmem=$(MLP_DIR)/mlp.data.hex +max_cycles=900000000
+npu-mlp-ooo:
+	$(MAKE) npu-mlp RUN_BIN=$(SIM_BIN_OOO)
+.PHONY: npu-mlp npu-mlp-ooo
+
 # --- run ------------------------------------------------------------------------
 test: $(RUN_BIN) $(SW_TESTS)
 	./$(RUN_BIN) +imem=$(PROG)
@@ -192,7 +228,8 @@ regress: $(RUN_BIN) $(SW_TESTS) $(CTEST_HEX)
 	done; \
 	for c in sw/ctests/*.c; do \
 	  b=$${c%.c}; \
-	  if out=$$(./$(RUN_BIN) +imem=$$b.text.hex +dmem=$$b.data.hex); then \
+	  if out=$$(./$(RUN_BIN) +imem=$$b.text.hex +dmem=$$b.data.hex \
+	            +max_cycles=2000000); then \
 	    pass=$$((pass+1)); printf 'PASS  %s\n' "$$c"; \
 	  else \
 	    fail=$$((fail+1)); printf 'FAIL  %s : %s\n' "$$c" "$$out"; \
@@ -280,8 +317,9 @@ synth-check:
 	cd synth && $(QUARTUS_MAP) rv32i_cpu
 
 clean:
-	rm -rf obj_dir sim.fst
+	rm -rf obj_dir obj_dir_ooo obj_dir_npu sim.fst
 	rm -f sw/tests/*.elf sw/tests/*.bin sw/tests/*.hex
 	rm -f sw/ctests/*.elf sw/ctests/*.bin sw/ctests/*.hex
 	rm -f sw/coremark/coremark.elf sw/coremark/*.bin sw/coremark/*.hex
 	rm -f sw/coremark/.cm_flags_stamp coremark.log
+	rm -f sw/npu_mlp/mlp.elf sw/npu_mlp/*.bin sw/npu_mlp/*.hex

@@ -95,7 +95,15 @@ RT (retire ≤2 in order from ROB head; ≤1 store/cycle -> SQ commit to
   commit to memory strictly at retire, ≤1/cycle. All memory-mapped
   side effects (LEDs, sim-exit, sim-console) are therefore
   non-speculative. MMIO **loads** may execute speculatively — this
-  SoC's MMIO reads (LEDs readback, switches) are side-effect-free.
+  SoC's MMIO reads (LEDs readback, switches, all NPU registers) are
+  side-effect-free.
+- **IO loads are strongly ordered** (added with the NPU, D014 — also
+  fixed latent B010): a load to region 0x4/0x5 replays until every
+  older store has left the SQ (new `q_older` query output), and NPU
+  loads additionally until the array is idle. The SQ drain gained
+  backpressure (`mw_ready`): a committed store bound for a busy NPU
+  waits at the head instead of corrupting a running pass. Details and
+  the no-deadlock/no-livelock arguments live in docs/NPU.md.
 - **CSR ops serialize**: rename holds a CSR op until the ROB is empty,
   so it cannot be on a wrong path and csr_file's execute-in-EX write
   stays safe. It then flows as a normal port1 op.

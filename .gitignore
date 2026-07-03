@@ -27,6 +27,11 @@ sw/**/*.map
 coremark.log
 sw/coremark/.cm_flags_stamp
 
+# MNIST idx files (11.6 MB) — fetched once for scripts/train_mlp.py; see
+# docs/NPU.md for the mirror URLs. weights.h (the training OUTPUT) is
+# checked in; the raw dataset is not.
+sw/npu_mlp/data/
+
 # Editor / backup noise
 *.bak
 *.orig
@@ -35,3 +40,4 @@ sw/coremark/.cm_flags_stamp
 # Session bookkeeping (not project content)
 .remember/
 obj_dir_ooo/
+obj_dir_npu/

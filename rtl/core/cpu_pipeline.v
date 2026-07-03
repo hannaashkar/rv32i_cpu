@@ -33,11 +33,14 @@ module cpu_pipeline (
     wire flushE;          // Insert bubble into EX stage
     wire if_id_flush;     // Flush IF/ID when mispredict happens
 
+    // NPU interlock stall (declared here, computed in EX — see below)
+    wire npu_stallE;
+
     // Program counter register
     pc PC0 (
         .clk    (clk),
         .reset  (reset),
-        .stall  (stallF),
+        .stall  (stallF | npu_stallE),
         .next_pc(next_pcF),
         .pc     (pcF)
     );
@@ -71,7 +74,7 @@ module cpu_pipeline (
         .reset         (reset),
         .if_pc         (pcF),
         .if_instruction(instrF),
-        .stall         (stallD),
+        .stall         (stallD | npu_stallE),
         .flush         (if_id_flush),
 
         .id_pc         (pcD),
@@ -193,6 +196,7 @@ module cpu_pipeline (
         .clk         (clk),
         .reset       (reset),
         .flush       (flushE),
+        .stall       (npu_stallE),
 
         // Control signals
         .RegWrite_in (RegWriteD),
@@ -404,6 +408,60 @@ module cpu_pipeline (
                                   : next_pc_predF;
 
     // ======================================================
+    // NPU interlock (docs/NPU.md, decision D014)
+    // ======================================================
+    // An NPU access (0x5xxx_xxxx) may pass EX->MEM only when the array
+    // is idle. busy_next also covers a GO store that is in MEM *right
+    // now* (its busy register sets one cycle later). While waiting, the
+    // access holds in EX: PC, IF/ID and ID/EX freeze and EX/MEM receives
+    // bubbles — MEM and WB keep flowing, so no committed side effect can
+    // repeat. The stalled instruction is a load/store, never a branch or
+    // CSR op, so no mispredict/train/CSR logic fires while held.
+    wire npu_busy;
+    wire npu_busy_next;
+
+    // The hold must SNAPSHOT the access's address and store data on its
+    // first stall cycle (BUGLOG B011): the forwarding sources that made
+    // them correct (producer still in MEM/WB) drain to bubbles while the
+    // pipe is frozen, and the ID/EX operand copies are decode-time
+    // regfile values — stale whenever forwarding was needed. Recomputing
+    // from the live muxes mid-hold lets the effective address decay, the
+    // region decode flip, and the interlock self-release onto a garbage
+    // address. Snapshot once (forwarding is valid on the first EX
+    // cycle), then use the held values for the stall decision and for
+    // what EX/MEM finally latches on release.
+    reg        npu_heldE;
+    reg [31:0] npu_addr_holdE;
+    reg [31:0] npu_data_holdE;
+
+    wire [31:0] npu_eff_addrE = npu_heldE ? npu_addr_holdE : alu_resultE;
+    wire is_npu_accessE = (MemReadE | MemWriteE)
+                          && (npu_eff_addrE[31:28] == 4'h5);
+    assign npu_stallE = is_npu_accessE && npu_busy_next;
+
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            npu_heldE      <= 1'b0;
+            npu_addr_holdE <= 32'b0;
+            npu_data_holdE <= 32'b0;
+        end else if (npu_stallE && !npu_heldE) begin
+            npu_heldE      <= 1'b1;          // first hold cycle: snapshot
+            npu_addr_holdE <= alu_resultE;   // forwarding still live here
+            npu_data_holdE <= rs2_fwd_base;
+        end else if (!npu_stallE) begin
+            npu_heldE <= 1'b0;
+        end
+    end
+
+`ifdef VERILATOR
+    // the escape mode B011 fixed: a held access must release only
+    // because the array went idle, never because its address decayed
+    always @(posedge clk)
+        if (!reset && npu_heldE && !npu_stallE && npu_busy_next)
+            $fatal(1, "cpu_pipeline: NPU hold released while array busy");
+`endif
+
+    // ======================================================
     // EX/MEM Pipeline Register
     // Pass results from EX into MEM stage
     // ======================================================
@@ -423,21 +481,24 @@ module cpu_pipeline (
         .clk              (clk),
         .reset            (reset),
 
-        // Control signals
-        .RegWrite_in      (RegWriteE),
-        .MemRead_in       (MemReadE),
-        .MemWrite_in      (MemWriteE),
+        // Control signals — gated into a bubble while the EX instruction
+        // is held by the NPU interlock (npu_stallE)
+        .RegWrite_in      (RegWriteE & ~npu_stallE),
+        .MemRead_in       (MemReadE  & ~npu_stallE),
+        .MemWrite_in      (MemWriteE & ~npu_stallE),
         .MemToReg_in      (MemToRegE),
-        .Branch_in        (BranchE),
-        .valid_in         (validE),
+        .Branch_in        (BranchE   & ~npu_stallE),
+        .valid_in         (validE    & ~npu_stallE),
 
         // Data signals. ex_resultE = pc+4 for jumps (link value), ALU
         // result otherwise — so jump links forward like any ALU result.
-        .alu_result_in    (ex_resultE),
+        // A held NPU access latches its SNAPSHOT address/data instead:
+        // by release time the live muxes have decayed (B011).
+        .alu_result_in    (npu_heldE ? npu_addr_holdE : ex_resultE),
         // Store data must be the FORWARDED rs2, not the raw ID/EX value —
         // otherwise a store right after its producer writes stale data
         // (BUGLOG B007, decision D011/F1)
-        .rs2_data_in      (rs2_fwd_base),
+        .rs2_data_in      (npu_heldE ? npu_data_holdE : rs2_fwd_base),
         .zero_in          (alu_zeroE),
         .branch_target_in (branch_targetE),
         .rd_in            (rdE),
@@ -495,25 +556,49 @@ module cpu_pipeline (
     // MEM (Memory Access) Stage
     // ======================================================
 
-    // Simple MMIO address check: 0x4xxxxxxx region is treated as IO
-    wire is_ioM = (alu_resultM[31:28] == 4'h4);
+    // Simple MMIO address check: 0x4xxxxxxx region is treated as IO,
+    // 0x5xxxxxxx is the NPU (docs/NPU.md, D014)
+    wire is_ioM  = (alu_resultM[31:28] == 4'h4);
+    wire is_npuM = (alu_resultM[31:28] == 4'h5);
 
-    // Separate data paths for regular RAM and MMIO reads
+    // Separate data paths for regular RAM, MMIO and NPU reads
     wire [31:0] ram_read_dataM;
     wire [31:0] mmio_read_dataM;
+    wire [31:0] npu_read_dataM;
 
     // Data memory: read and write ports carry the same MEM-stage access
     dmem DMEM0 (
         .clk        (clk),
-        .mem_read   (MemReadM  & ~is_ioM),  // only access RAM when not IO
+        .mem_read   (MemReadM  & ~is_ioM & ~is_npuM),
         .raddr      (alu_resultM),
         .rfunct3    (funct3M),              // access size + sign extension
         .read_data  (ram_read_dataM),
-        .mem_write  (MemWriteM & ~is_ioM),  // only write RAM when not IO
+        .mem_write  (MemWriteM & ~is_ioM & ~is_npuM),
         .waddr      (alu_resultM),
         .write_data (rs2_dataM),
         .wfunct3    (funct3M)
     );
+
+    // NPU: the EX interlock guarantees any access arriving here finds
+    // the array idle (asserted below); MEM-stage stores are committed
+    // by definition in this pipeline, so side effects are safe.
+    npu_top NPU0 (
+        .clk       (clk),
+        .reset     (reset),
+        .raddr     (alu_resultM),
+        .rdata     (npu_read_dataM),
+        .we        (MemWriteM & is_npuM),
+        .waddr     (alu_resultM),
+        .wdata     (rs2_dataM),
+        .busy      (npu_busy),
+        .busy_next (npu_busy_next)
+    );
+
+`ifdef VERILATOR
+    always @(posedge clk)
+        if (!reset && (MemReadM | MemWriteM) && is_npuM && npu_busy)
+            $fatal(1, "cpu_pipeline: NPU access reached MEM while busy");
+`endif
 
     // MMIO block for LEDs and switches
     wire [9:0] leds_mmio;
@@ -531,10 +616,11 @@ module cpu_pipeline (
         .switches (switches)
     );
 
-    // Select the correct read data: MMIO vs regular RAM
+    // Select the correct read data: MMIO vs NPU vs regular RAM
     wire [31:0] dmem_read_dataM;
-    assign dmem_read_dataM = is_ioM ? mmio_read_dataM
-                                    : ram_read_dataM;
+    assign dmem_read_dataM = is_ioM  ? mmio_read_dataM
+                           : is_npuM ? npu_read_dataM
+                                     : ram_read_dataM;
 
     // ======================================================
     // MEM/WB Pipeline Register

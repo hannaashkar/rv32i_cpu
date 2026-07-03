@@ -38,11 +38,15 @@ module ooo_sq (
     // retire marks the oldest unmarked entry committed (<=1/cycle)
     input  wire        retire_mark_en,
 
-    // memory drain port (top routes to dmem/mmio; also lockstep snoop)
+    // memory drain port (top routes to dmem/mmio/npu; also lockstep
+    // snoop). mw_ready=0 holds the head in place — used by the NPU
+    // backpressure (docs/NPU.md D014): a committed store must not reach
+    // a busy device, so the drain waits instead.
     output wire        mw_valid,
     output wire [31:0] mw_addr,
     output wire [31:0] mw_data,
     output wire [2:0]  mw_f3,
+    input  wire        mw_ready,
 
     // load forwarding query (combinational)
     input  wire [31:0] q_addr,
@@ -50,6 +54,8 @@ module ooo_sq (
     output reg         q_hit,        // full-word match: use q_data
     output reg  [31:0] q_data,
     output reg         q_conflict,   // partial overlap: replay the load
+    output reg         q_older,      // ANY older store still buffered —
+                                     // IO loads replay on this (D014/B010)
 
     // squash: restore tail to checkpoint value, killing younger entries
     input  wire        flush_en,
@@ -106,7 +112,10 @@ module ooo_sq (
     reg        m_word;
     always @(*) begin
         m_found = 1'b0; m_age = 4'd0; m_data = 32'b0; m_word = 1'b0;
+        q_older = 1'b0;
         for (k = 0; k < SQD; k = k + 1) begin
+            if (v[k] && ((tag4[k] - head) < (q_color4 - head)))
+                q_older = 1'b1;
             if (v[k] && known[k]
                 && (addr[k][31:2] == q_addr[31:2])
                 && ((tag4[k] - head) < (q_color4 - head))) begin
@@ -165,8 +174,8 @@ module ooo_sq (
                 cptr <= cptr + 4'd1;
             end
 
-            // drain
-            if (mw_valid) begin
+            // drain (held while the target device backpressures)
+            if (mw_valid && mw_ready) begin
                 v[hidx] <= 1'b0;
                 head    <= head + 4'd1;
             end

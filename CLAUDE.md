@@ -205,7 +205,40 @@ autonomously, every decision logged in DECISIONS.md:
   green on BOTH cores; quartus_map 0 errors with all OoO RTL included.
   FPGA top remains cpu_pipeline until the timing/PLL stage (B005).
 
-**Next**: NPU stage (4×4 int8 systolic array via MMIO 0x5xxxxxxx, unit
-TB vs golden matmul, C driver, quantized MLP, measured speedup) → then
-post-baseline measured stages: speculative loads + LQ, B005 (PLL+SDC,
-switch FPGA top to ooo_cpu), B006 (BRAM memories).
+**2026-07-03 (NPU stage, branch `npu-array`, decisions D014/D015,
+docs/NPU.md is the spec)**:
+- `rtl/npu/`: 4×4 int8 **output-stationary systolic array** (npu_pe /
+  npu_array / npu_top), MMIO region 0x5xxx_xxxx, tile-accumulate across
+  GO commands (K tiling), 10-cycle pass, reads side-effect-free. Unit TB
+  (`make npu-tb`): 2000 random accumulation chains vs C++ golden — PASS.
+- **Hardware ordering interlocks, software never polls**: OoO core —
+  IO-region loads replay until every older store drains (new SQ
+  `q_older`) and (region 5) `busy_next` clears; SQ drain backpressures
+  into a busy NPU (`mw_ready`/`mw_fire`; harness snoops `mw_fire`).
+  In-order core — NPU accesses stall in EX on `busy_next` (id_ex_reg
+  gained a stall-wins-over-flush input) with address/data SNAPSHOTTED at
+  hold entry. Found+fixed latent **B010** (SQ forwarding shadowed MMIO
+  reads) and **B011** (EX-hold operand decay — critical, caught by the
+  adversarial review workflow pre-merge, regression
+  `sw/tests/npu_ordering.S` + release assertion added).
+- **ISS mirrors the NPU** (instantaneous at the GO store — exact because
+  busy is architecturally unobservable): every NPU access in every test
+  is lockstep-compared. Regression + riscv-tests + random: all green on
+  BOTH cores incl. two new NPU ctests (register semantics + random
+  tiled GEMMs).
+- **Quantized MNIST MLP end-to-end** (`scripts/train_mlp.py`, numpy,
+  seeded): 784→32→10, symmetric int8, TFLite-style requant — 97.10%
+  float / **97.13% integer** on the full 10k test set. On-core
+  (`make npu-mlp[-ooo]`): soft int8 path vs NPU path bit-exact, 32/32
+  images correct, **speedup 85.99× in-order / 55.89× OoO** (soft 96.4M
+  vs NPU 1.12M cycles; OoO soft 58.5M vs 1.05M — its IPC on the mul-
+  heavy soft path is 1.54). ~92M instructions lockstep-verified per run,
+  zero divergence.
+- quartus_map: **0 errors**, 16 DSP elements (the PE multipliers), 24812
+  LEs total with both cores + NPU in the tree. Real-board MLP demo needs
+  B006 (BRAM) first — speedups above are simulation-measured
+  (SIM_BIG_MEM), same methodology as the CoreMark baseline.
+
+**Next**: post-baseline measured stages: speculative loads + LQ, B005
+(PLL+SDC, switch FPGA top to ooo_cpu), B006 (BRAM memories — also
+unblocks the on-board MLP demo).

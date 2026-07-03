@@ -5,6 +5,62 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D015 — 2026-07-03 — MNIST MLP quantization scheme (executed under the
+## "all done" directive; decided by Claude, documented for review)
+
+784→32(ReLU)→10 MLP, trained offline in numpy (`scripts/train_mlp.py`,
+seeded, 97.10% float). Quantization: **symmetric per-tensor int8** with
+TFLite-style fixed-point requantization — `h = clamp((acc*M1 + rnd) >>
+N1, 0, 127)` in int64 — over (a) asymmetric/per-channel quantization
+(better accuracy headroom, but zero-point cross terms and per-channel
+scales complicate both the C driver and the defense story for zero gain
+at this accuracy: integer pipeline hits 97.13%, above float) and (b)
+power-of-two scales only (simplest requant — a bare shift — but cost
+~1% accuracy in trials elsewhere; the int64 multiply happens 32× per
+batch, negligible next to 100K MACs). The hidden scale is calibrated
+(`sh = max_activation/127` over 1000 training samples) because the naive
+`sh = 1/127` saturates (int accuracy collapses to 60%) — the script
+auto-selects and records the choice. Layer 2 keeps raw int32 logits +
+argmax (classification needs no requant). Batch = 4 images through the
+4 array columns for full utilization. Bit-exactness chain: numpy integer
+reference → exported goldens → on-core soft int8 path → NPU path, each
+step compared exactly.
+
+## D014 — 2026-07-03 — NPU: MMIO-mapped 4×4 output-stationary systolic
+## array with hardware ordering interlocks (executed under the "all done"
+## directive; decided by Claude, documented for review)
+
+Full spec in docs/NPU.md. Four choices and their alternatives:
+
+1. **Interface: MMIO region 0x5xxx_xxxx** over custom instructions.
+   Zero decoder changes, works identically on both cores, plain-C
+   driver, and the OoO core's SQ already makes MMIO side effects
+   non-speculative. Custom matmul instructions would save ~9 stores per
+   tile but touch decode/rename/IQ on the OoO core — revisit only if
+   the measured MMIO overhead justifies it.
+2. **Dataflow: output-stationary** over weight-stationary (TPU-style)
+   and over a flat combinational MAC array. OS keeps the 16 partial
+   sums in the PEs across GO commands, so K-tiling (the common loop:
+   784 deep in layer 1) needs no C read-modify-write traffic — just
+   stream new A/B tiles and GO. Weight-stationary only wins when one
+   weight tile is reused across many activation tiles, which a batch-4
+   MLP never does (weights change every k-step). A combinational MAC
+   array is not a systolic array — fails the roadmap deliverable and
+   teaches nothing about dataflow timing.
+3. **Tile buffers: 4×4 registers with accumulate-across-GO** (16 B A +
+   16 B B) over K-deep staging SRAM (e.g. K=256: 2 KB). Deep staging
+   amortizes CTRL traffic but costs ~16K FFs while B006 (no BRAM
+   inference yet) is still open — the register-tile design is honest
+   about today's FF-memory reality and keeps the unit fully testable.
+4. **Ordering: hardware interlocks, software never polls.** OoO: IO
+   loads replay until every older store has drained AND the array is
+   idle (`busy_next`); the SQ head backpressures (`mw_ready`) instead
+   of draining into a busy NPU. In-order: NPU accesses stall in EX on
+   `busy_next`. Alternative — software delay loops / poll protocols —
+   rejected: unverifiable timing contracts, and the interlock is what
+   makes the instantaneous ISS mirror lockstep-exact (busy is
+   architecturally unobservable). Found+fixed latent B010 on the way.
+
 ## D013 — 2026-07-03 — 2-wide OoO microarchitecture (executed under the
 ## "all done" directive; decided by Claude, documented for review)
 

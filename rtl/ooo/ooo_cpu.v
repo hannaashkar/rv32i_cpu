@@ -644,12 +644,14 @@ module ooo_cpu (
     wire [31:0] p2_a = bypass(ex_u[2][`U_PS1], ex_a[2]);
     wire [31:0] p2_data = bypass(ex_u[2][`U_PS2], ex_b[2]);
     wire [31:0] p2_addr = p2_a + ex_u[2][`U_IMM];
-    wire        p2_isio = (p2_addr[31:28] == 4'h4);
+    wire        p2_isio  = (p2_addr[31:28] == 4'h4);
+    wire        p2_isnpu = (p2_addr[31:28] == 4'h5);   // NPU region (D014)
+    wire        p2_io_any = p2_isio | p2_isnpu;
     wire        p2_load  = ex_v[2] && ex_u[2][`U_ISLOAD];
     wire        p2_store = ex_v[2] && ex_u[2][`U_ISSTORE];
 
     // SQ
-    wire        sq_qhit, sq_qconf;
+    wire        sq_qhit, sq_qconf, sq_qolder;
     wire [31:0] sq_qdata;
     wire        mw_valid /*verilator public_flat_rd*/;
     wire [31:0] mw_addr  /*verilator public_flat_rd*/;
@@ -667,23 +669,31 @@ module ooo_cpu (
         .fill_f3(ex_u[2][`U_F3]),
         .retire_mark_en((ret0_ok && rob_st[h0]) || (ret1_ok && rob_st[h1])),
         .mw_valid(mw_valid), .mw_addr(mw_addr), .mw_data(mw_data),
-        .mw_f3(mw_f3),
+        .mw_f3(mw_f3), .mw_ready(mw_ready),
         .q_addr(p2_addr), .q_color4(ex_u[2][`U_SQCOL]),
         .q_hit(sq_qhit), .q_data(sq_qdata), .q_conflict(sq_qconf),
+        .q_older(sq_qolder),
         .flush_en(restore_en), .flush_tail4(chk_sqt[restore_chk[2:0]]),
         .unknown_mask(sq_unknown)
     );
 
-    // memory write routing (SQ drain -> dmem or mmio)
-    wire mw_isio = (mw_addr[31:28] == 4'h4);
-    wire [31:0] dmem_rdata, mmio_rdata;
+    // memory write routing (SQ drain -> dmem, mmio or npu). The drain
+    // fires only when the target accepts: a busy NPU backpressures via
+    // mw_ready and the committed store waits at the SQ head (D014) —
+    // dmem/mmio always accept, so for them mw_fire == mw_valid.
+    wire mw_isio  = (mw_addr[31:28] == 4'h4);
+    wire mw_isnpu = (mw_addr[31:28] == 4'h5);
+    wire npu_busy, npu_busy_next;
+    wire mw_ready = !(mw_isnpu && npu_busy);
+    wire mw_fire /*verilator public_flat_rd*/ = mw_valid && mw_ready;
+    wire [31:0] dmem_rdata, mmio_rdata, npu_rdata;
 
     dmem DMEM0 (
         .clk(clk),
-        .mem_read(p2_load && !p2_isio),
+        .mem_read(p2_load && !p2_io_any),
         .raddr(p2_addr), .rfunct3(ex_u[2][`U_F3]),
         .read_data(dmem_rdata),
-        .mem_write(mw_valid && !mw_isio),
+        .mem_write(mw_fire && !mw_isio && !mw_isnpu),
         .waddr(mw_addr), .write_data(mw_data), .wfunct3(mw_f3)
     );
 
@@ -692,10 +702,21 @@ module ooo_cpu (
         .clk(clk), .reset(reset),
         .raddr(p2_addr), .rdata(mmio_rdata),
         .waddr(mw_addr), .wdata(mw_data),
-        .we(mw_valid && mw_isio),
+        .we(mw_fire && mw_isio),
         .leds(leds_mmio), .switches(switches)
     );
     assign leds = leds_mmio;
+
+    // NPU (docs/NPU.md D014): reads are side-effect-free, so the
+    // speculative load pipe may touch it freely; writes are committed
+    // stores and, by mw_ready above, only ever arrive while idle.
+    npu_top NPU0 (
+        .clk(clk), .reset(reset),
+        .raddr(p2_addr), .rdata(npu_rdata),
+        .we(mw_fire && mw_isnpu),
+        .waddr(mw_addr), .wdata(mw_data),
+        .busy(npu_busy), .busy_next(npu_busy_next)
+    );
 
     // load value: SQ forward (extract) > mmio raw word > dmem extracted
     function [31:0] extract_load;
@@ -717,11 +738,27 @@ module ooo_cpu (
         end
     endfunction
 
-    wire        p2_replay = p2_load && sq_qconf;
+    // IO-region loads are strongly ordered (D014, fixes B010): they
+    // replay until every older store has drained — so when one finally
+    // performs, an SQ forward hit is impossible (asserted below) and the
+    // device read is the program-order value. NPU loads additionally
+    // wait for the array to go idle (busy_next covers a same-cycle GO
+    // drain), which is what makes busy architecturally unobservable and
+    // the instantaneous ISS mirror exact.
+    wire        p2_replay = p2_load && (sq_qconf
+                          || (p2_io_any && sq_qolder)
+                          || (p2_isnpu  && npu_busy_next));
     wire [31:0] p2_result =
         sq_qhit  ? extract_load(sq_qdata, p2_addr[1:0], ex_u[2][`U_F3])
       : p2_isio  ? mmio_rdata
+      : p2_isnpu ? npu_rdata
       :            dmem_rdata;
+
+`ifdef VERILATOR
+    always @(posedge clk)
+        if (!reset && p2_load && p2_io_any && !p2_replay && sq_qhit)
+            $fatal(1, "ooo_cpu: IO load completed with an SQ forward hit");
+`endif
 
     // =====================================================================
     // IQ

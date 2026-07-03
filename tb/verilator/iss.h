@@ -46,6 +46,16 @@ public:
     uint32_t imem[DEPTH_WORDS];
     uint32_t dmem[DEPTH_WORDS];
 
+    // NPU mirror (docs/NPU.md, D014). The RTL interlocks make busy
+    // architecturally unobservable, so executing the whole tile pass
+    // instantaneously AT the GO store is lockstep-exact: every register
+    // read and every store to the 0x5 region is compared like ordinary
+    // state. Register map mirrors npu_top.v exactly (word-exact decode).
+    uint32_t npu_a[4];                               // A[i][k] = byte k
+    uint32_t npu_b[4];                               // B[k][j] = byte j
+    int32_t  npu_c[16];                              // C row-major, int32
+    bool     npu_done;
+
     // Result of the most recent step(), for comparison against the RTL
     struct Effect {
         uint32_t pc;             // pc of the executed instruction
@@ -70,6 +80,10 @@ public:
         switches = 0;
         for (uint32_t i = 0; i < DEPTH_WORDS; ++i) imem[i] = 0x00000013; // NOP
         memset(dmem, 0, sizeof(dmem));
+        memset(npu_a, 0, sizeof(npu_a));
+        memset(npu_b, 0, sizeof(npu_b));
+        memset(npu_c, 0, sizeof(npu_c));
+        npu_done = false;
     }
 
     // $readmemh-style loader: one hex word per line, '//' comments allowed.
@@ -89,12 +103,53 @@ public:
         return true;
     }
 
-    static bool is_io(uint32_t addr) { return (addr >> 28) == 0x4; }
+    static bool is_io(uint32_t addr)  { return (addr >> 28) == 0x4; }
+    static bool is_npu(uint32_t addr) { return (addr >> 28) == 0x5; }
 
     uint32_t mmio_read(uint32_t addr) const {
         if (addr == 0x40000000u) return leds & 0x3FF;
         if (addr == 0x40000004u) return switches & 0x3FF;
         return 0;
+    }
+
+    // exact-address decode, mirroring npu_top.v's read mux 1:1
+    uint32_t npu_read(uint32_t addr) const {
+        if (addr == 0x50000000u) return 0x4E505501u;              // NPU_ID
+        if (addr == 0x50000004u) return npu_done ? 2u : 0u;       // STATUS
+        if (addr >= 0x50000010u && addr <= 0x5000001Cu && !(addr & 3u))
+            return npu_a[(addr - 0x50000010u) >> 2];
+        if (addr >= 0x50000020u && addr <= 0x5000002Cu && !(addr & 3u))
+            return npu_b[(addr - 0x50000020u) >> 2];
+        if (addr >= 0x50000040u && addr <= 0x5000007Cu && !(addr & 3u))
+            return (uint32_t)npu_c[(addr - 0x50000040u) >> 2];
+        return 0;                                                 // unmapped
+    }
+
+    void npu_write(uint32_t addr, uint32_t data) {
+        if (addr == 0x50000008u) {                                // CTRL
+            if (data & 2u) {                                      // CLR
+                memset(npu_c, 0, sizeof(npu_c));
+                npu_done = false;
+            }
+            if (data & 1u) {                                      // GO
+                for (int i = 0; i < 4; ++i)
+                    for (int j = 0; j < 4; ++j)
+                        for (int k = 0; k < 4; ++k) {
+                            int32_t a = (int8_t)(npu_a[i] >> (8 * k));
+                            int32_t b = (int8_t)(npu_b[k] >> (8 * j));
+                            // unsigned add: the RTL accumulator wraps
+                            // mod 2^32; signed += would be UB there
+                            npu_c[i * 4 + j] = (int32_t)(
+                                (uint32_t)npu_c[i * 4 + j]
+                                + (uint32_t)(a * b));
+                        }
+                npu_done = true;
+            }
+        } else if (addr >= 0x50000010u && addr <= 0x5000001Cu && !(addr & 3u)) {
+            npu_a[(addr - 0x50000010u) >> 2] = data;
+        } else if (addr >= 0x50000020u && addr <= 0x5000002Cu && !(addr & 3u)) {
+            npu_b[(addr - 0x50000020u) >> 2] = data;
+        }                                    // R/O + unmapped writes dropped
     }
 
     // Execute one instruction. csr_inject supplies the RTL's writeback
@@ -168,6 +223,8 @@ public:
             uint32_t val;
             if (is_io(addr)) {
                 val = mmio_read(addr);       // raw word: no lane extraction
+            } else if (is_npu(addr)) {
+                val = npu_read(addr);        // raw word, same quirk
             } else {
                 const uint32_t word  = dmem[(addr >> 2) & IDX_MASK];
                 const uint32_t byte_ = (word >> ((addr & 3) * 8)) & 0xFF;
@@ -192,6 +249,8 @@ public:
             eff.st_funct3 = funct3;
             if (is_io(addr)) {
                 if (addr == 0x40000000u) leds = b & 0x3FF; // full word, any size
+            } else if (is_npu(addr)) {
+                npu_write(addr, b);                        // full word too
             } else {
                 const uint32_t idx = (addr >> 2) & IDX_MASK;
                 switch (funct3 & 3) {
