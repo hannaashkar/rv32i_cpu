@@ -80,20 +80,30 @@ the RTL**.
 - `tb/legacy/` — original ModelSim TB; `tb/verilator/` — C++ harness (WIP)
 - `sw/`, `synth/`, `docs/`, `scripts/`
 
-## Design state (verified 2026-07-03)
+## Design state (updated 2026-07-03, post RV32I completion)
 
-- Classic Harris & Harris 5-stage: IF → ID → EX → MEM → WB. Forwarding
-  EX←MEM and EX←WB; load-use stall; 64-entry 2-bit BHT + tagged BTB queried
-  in IF, updated in EX; mispredict costs 2 cycles (flush IF/ID + ID/EX).
-- **ISA actually working: ADD SUB AND OR XOR SLT, ADDI (see B004), ANDI ORI
-  XORI SLTI, LW, SW, BEQ.** Missing: JAL, JALR, LUI, AUIPC, all shifts,
-  SLTU/SLTIU, byte/half loads/stores, BNE..BGEU, FENCE, CSRs, traps, M.
-  → **No compiled C can run until RV32I is completed** (decision D003).
-- Known bugs and quirks: see `docs/BUGLOG.md` (B004 ADDI/SUB decode spoof,
-  B002 no shifter, B005 ripple clock fails timing, B006 memories synthesize
-  to FFs — 0 BRAM bits, 12.5k FFs, 15.4k LEs at last fit).
-- Synthesis check: `quartus_map` passes with 0 errors on the restructured
-  tree (2026-07-03).
+- Classic 5-stage: IF → ID → EX → MEM → WB. Forwarding EX←MEM and EX←WB
+  incl. store data (B007); regfile write→read bypass (B008); load-use
+  stall; 64-entry 2-bit BHT + tagged BTB queried in IF, trained in EX by
+  branches AND jumps; mispredict/redirect costs 2 cycles.
+- Decode: flat funct3-based ALU decode (D006/A2, `alu_ops.vh` classes);
+  dedicated branch comparator (D007/B2); jumps resolve in EX via the
+  redirect path with pc+4 linked through the EX result mux (D008/C1);
+  LUI/AUIPC through the ALU with a pc operand-A mux (D009/D1); dmem does
+  byte/half lanes + sign/zero extension via funct3 in MEM (D010/Eb).
+- **ISA: full RV32I user-level compute — all ALU ops + shifts, SLTU/SLTIU,
+  all six branches, JAL/JALR, LUI/AUIPC, LB/LBU/LH/LHU/LW, SB/SH/SW.**
+  Compiled C can run. Still missing: FENCE (safe to treat as NOP),
+  ECALL/EBREAK/traps, CSRs (next: cycle/instret for measurement), M ext.
+- Tests: `make regress` = 7 directed suites in `sw/tests/` (ALU incl. B004
+  regression, branches, jumps incl. BTB-stale return, LUI/AUIPC, sub-word
+  memory lanes/sign, store-forwarding, smoke). All green.
+- Memory: combinational imem/dmem (B006 BRAM rework deferred, D010);
+  `SIM_BIG_MEM` (set by the Verilator build) gives 256 KB memories in sim
+  while synthesis keeps 4 KB imem / 1 KB dmem.
+- Remaining known issues: B005 (ripple clock / timing), B006 (FF
+  memories) — both deliberately post-baseline; see BUGLOG watch list for
+  minor quirks (spurious hazard stalls from immediate bits, word-only MMIO).
 
 ## Current status (update every session!)
 
@@ -119,7 +129,17 @@ the RTL**.
 - New bug found while writing the smoke test: B007 — store data bypasses
   forwarding (EX/MEM latches unforwarded `rs2_dataE`).
 
-**Next**: RV32I completion plan — present option sets to Hanna (shifter,
-ADDI/funct7 fix, branch conditions incl. B004/B007 fixes, JAL/JALR,
-LUI/AUIPC, byte/half memory ops), implement incrementally with per-feature
-tests → then cycle/instret CSRs → CoreMark baseline (Tasks 1.6–1.7).
+**2026-07-03 (later)** — RV32I completion executed per decisions D006–D011
+(branches F → A → B → D → C → E, each tested + Quartus-checked + merged):
+- Fixed B007 (store-data forwarding) and discovered+fixed B008 (regfile
+  write→read bypass) — both caught by `sw/tests/store_fwd.S`.
+- A2 flat decode + shifts + SLTU (killed B004; LED demo works — B002);
+  B2 branch unit (all six conditions); D1 LUI/AUIPC; C1 JAL/JALR through
+  the redirect path; Eb sub-word dmem with funct3 in MEM.
+- `make regress`: 7/7 suites green; quartus_map 0 errors throughout.
+
+**Next**: cycle/instret CSRs (rdcycle/rdinstret for measurement) →
+C runtime bring-up (crt0, linker layout for Harvard imem/dmem, +dmem
+data-image loading) → CoreMark port → baseline IPC → docs/BASELINE.md →
+tag v1.0-inorder-baseline. Consider porting riscv-tests rv32ui as the
+acceptance gate alongside.

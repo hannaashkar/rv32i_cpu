@@ -18,7 +18,11 @@
 //     always does this, so programs swap without recompiling the model.
 // ============================================================================
 module imem #(
+`ifdef SIM_BIG_MEM
+    parameter DEPTH_WORDS = 65536,                      // 256 KB (benchmarks)
+`else
     parameter DEPTH_WORDS = 1024,                       // 4 KB of program
+`endif
     // Default program used by Quartus builds (path relative to synth/).
     // NOTE: keep the word "synthesis" out of trailing comments here —
     // Quartus parses "synthesis <x>" inside comments as a pragma.

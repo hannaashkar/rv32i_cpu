@@ -128,10 +128,18 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 
 ## Known non-bug quirks (watch list)
 
-- **BNE decodes as BEQ:** branch-taken condition is `Branch && alu_zero`
-  regardless of funct3. Not counted as a bug yet because only BEQ is claimed
-  as supported; becomes a bug the moment BNE is used. Fix with RV32I
-  completion.
-- **dmem indexes with full `addr[31:2]`** into a 256-entry array, relying on
-  implicit index truncation. Works, but masks address-decode mistakes;
-  tighten during memory rework.
+- ~~BNE decodes as BEQ~~ — resolved 2026-07-03 by the dedicated branch
+  unit (D007/B2): all six conditions decoded from funct3, each covered
+  taken/not-taken in `sw/tests/branch_ops.S`.
+- ~~dmem indexes with full `addr[31:2]`~~ — resolved 2026-07-03: imem and
+  dmem now index with an explicit `$clog2(DEPTH)`-wide slice (aliasing is
+  deliberate and documented).
+- **Spurious hazards from immediate bits:** the hazard/forwarding units
+  compare the rs1/rs2 *fields* of every instruction, including formats
+  where those bits are immediate data (e.g. I-type rs2 field, LUI rs1
+  field). Worst case is an unnecessary 1-cycle load-use stall — a small
+  IPC leak, never a correctness issue. Fix by decoding rs1/rs2-valid
+  flags; measure the IPC delta when CoreMark runs.
+- **MMIO registers are word-access-only:** sub-word loads/stores to
+  0x4xxxxxxx bypass the dmem lane logic and hit the raw MMIO registers.
+  C code must use `volatile uint32_t*` for MMIO (normal practice).

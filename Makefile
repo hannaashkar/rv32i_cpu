@@ -44,6 +44,7 @@ SIM_BIN   := obj_dir/V$(TOP)
 VFLAGS := --cc --exe --build -j 0 --top-module $(TOP) --trace-fst -Wno-fatal \
           -MAKEFLAGS OPT_FAST=-O2 -MAKEFLAGS OPT_SLOW=-O2 -MAKEFLAGS OPT_GLOBAL=-O2 \
           -MAKEFLAGS VM_PARALLEL_BUILDS=1 \
+          +define+SIM_BIG_MEM \
           $(addprefix -I,$(RTL_DIRS))
 
 # --- software ----------------------------------------------------------------

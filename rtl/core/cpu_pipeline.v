@@ -369,6 +369,7 @@ module cpu_pipeline (
     wire        alu_zeroM;
     wire [31:0] branch_targetM;
     wire [4:0]  rdM;
+    wire [2:0]  funct3M;
 
     ex_mem_reg EXMEM0 (
         .clk              (clk),
@@ -391,6 +392,7 @@ module cpu_pipeline (
         .zero_in          (alu_zeroE),
         .branch_target_in (branch_targetE),
         .rd_in            (rdE),
+        .funct3_in        (funct3E),
 
         // Outputs to MEM stage
         .RegWrite_out     (RegWriteM),
@@ -403,7 +405,8 @@ module cpu_pipeline (
         .rs2_data_out     (rs2_dataM),
         .zero_out         (alu_zeroM),
         .branch_target_out(branch_targetM),
-        .rd_out           (rdM)
+        .rd_out           (rdM),
+        .funct3_out       (funct3M)
     );
 
     // ======================================================
@@ -454,6 +457,7 @@ module cpu_pipeline (
         .mem_write  (MemWriteM & ~is_ioM),  // only write RAM when not IO
         .addr       (alu_resultM),
         .write_data (rs2_dataM),
+        .funct3     (funct3M),              // access size + sign extension
         .read_data  (ram_read_dataM)
     );
 
