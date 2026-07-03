@@ -186,6 +186,30 @@ regress: $(SIM_BIN) $(SW_TESTS) $(CTEST_HEX)
 	printf 'regress: %d passed, %d failed\n' $$pass $$fail; \
 	[ $$fail -eq 0 ]
 
+# --- constrained-random regression (every instruction lockstep-checked) ------
+# Programs are generated fresh each run (seeded, reproducible) and checked
+# instruction-by-instruction against the golden model — no self-checking
+# needed in the programs themselves. Reproduce one failure with:
+#   python scripts/gen_random_test.py <seed> r.hex && obj_dir/Vcpu_pipeline +imem=r.hex
+RAND_SEEDS ?= 25
+RAND_LEN   ?= 3000
+regress-rand: $(SIM_BIN)
+	@mkdir -p build/rand; pass=0; fail=0; \
+	for s in $$(seq 1 $(RAND_SEEDS)); do \
+	  $(PYTHON) scripts/gen_random_test.py $$s build/rand/rand_$$s.hex $(RAND_LEN); \
+	  if out=$$(./$(SIM_BIN) +imem=build/rand/rand_$$s.hex); then \
+	    pass=$$((pass+1)); \
+	  else \
+	    fail=$$((fail+1)); printf 'FAIL  seed %s\n%s\n' "$$s" "$$out"; \
+	  fi; \
+	done; \
+	printf 'regress-rand: %d/%d seeds passed (%s instrs each, lockstep-checked)\n' \
+	    $$pass $(RAND_SEEDS) $(RAND_LEN); \
+	[ $$fail -eq 0 ]
+
+# Umbrella: everything that must be green before merging to main
+verify: regress regress-rand
+
 run: $(SIM_BIN)
 	./$(SIM_BIN) +imem=$(PROG) $(DMEM_ARG)
 
