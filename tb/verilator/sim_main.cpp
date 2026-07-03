@@ -143,7 +143,10 @@ int main(int argc, char** argv) {
 
 #ifdef OOO_TOP
         // ---- OoO core: snoop the SQ commit port ------------------------
-        if (CORE(mw_valid)) {
+        // mw_fire = mw_valid && mw_ready: with the NPU drain backpressure
+        // (D014) a held store keeps mw_valid asserted for several cycles,
+        // so snooping mw_valid would duplicate store events.
+        if (CORE(mw_fire)) {
             if (CORE(mw_addr) == MAGIC_PUTC_ADDR) {
                 putchar((int)(CORE(mw_data) & 0xFF));
                 fflush(stdout);
@@ -210,7 +213,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (CORE(mw_valid) && CORE(mw_addr) == MAGIC_EXIT_ADDR) {
+        if (CORE(mw_fire) && CORE(mw_addr) == MAGIC_EXIT_ADDR) {
             uint32_t code = CORE(mw_data);
             if (code == 1) {
                 printf("[sim] PASS after %llu cycles\n",

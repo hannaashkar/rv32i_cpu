@@ -5,6 +5,12 @@ module id_ex_reg (
     // Flush signal from hazard or branch misprediction logic
     input flush,
 
+    // Hold signal (NPU interlock, D014): keeps the EX-stage instruction
+    // in place while it waits for the NPU to go idle. Stall WINS over
+    // flush — a simultaneous load-use flush must not erase the very
+    // instruction that is waiting.
+    input stall,
+
     // -------------------------------
     // Control signals coming from ID stage
     // -------------------------------
@@ -102,6 +108,10 @@ module id_ex_reg (
             pred_takenE       <= 0;
             pred_targetE      <= 0;
 
+        end else if (stall) begin
+            // ---------------------------------------------------
+            // Hold: the EX instruction stays put (no assignments)
+            // ---------------------------------------------------
         end else if (flush) begin
             // -------------------------------------------------
             // Pipeline flush: insert a bubble into EX stage

@@ -7,6 +7,57 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 
 ---
 
+## B011 — In-order NPU EX-hold recomputes address/data from decaying forwarding muxes — FIXED (2026-07-03)
+
+- **Symptom:** none in the merged suites — caught pre-merge. With the
+  B011 shape (`sw GO→CTRL; addi t3,t0,0x40; lw t4,0(t3)`) the held load
+  performed a dmem read at a garbage address: lockstep divergence, or
+  silently wrong data with lockstep off.
+- **Root cause:** the D014 EX-stage stall froze PC/IF-ID/ID-EX but let
+  MEM and WB drain (deliberately, to avoid re-executing side effects).
+  The held access's address (`alu_resultE`) and store data
+  (`rs2_fwd_base`) were recomputed combinationally every held cycle from
+  the forwarding muxes — whose sources are exactly the draining MEM/WB
+  stages. Two cycles into the hold the producer was gone, the muxes fell
+  back to the stale decode-time ID/EX regfile copies, the address left
+  region 0x5, `npu_stallE` self-released, and the access escaped to
+  dmem/MMIO while the array was busy. Store data decayed the same way.
+- **How caught:** adversarial design review of the NPU stage (workflow,
+  finding confirmed by a simulation reproducer) — compiled C never hits
+  the shape because gcc hoists MMIO base addresses far from the access.
+- **Fix:** snapshot `alu_resultE`/`rs2_fwd_base` into hold registers on
+  the FIRST stall cycle (forwarding is live there by construction); the
+  stall decision and the values EX/MEM finally latches use the snapshot.
+  New assertion: a hold may release only because the array went idle.
+  Directed regression `sw/tests/npu_ordering.S` catches it pre-fix (the
+  release assertion fires on the very first held load; without
+  assertions the C readback returns dmem garbage, code 2) and passes
+  post-fix on both cores — verified both ways by temporarily reverting
+  the snapshot muxes.
+
+## B010 — OoO SQ forwarding shadows MMIO reads (latent lockstep divergence) — FIXED (2026-07-03)
+
+- **Symptom:** none yet observed — latent. A load from an IO word with an
+  older, still-queued store to the SAME word (e.g. `sw` to the LED
+  register followed closely by `lw` from it) would forward the raw store
+  word from the SQ instead of reading the device register. The ISS reads
+  the device (LEDs are masked to 10 bits; switch-register stores are
+  dropped entirely), so the first program to do this would have died with
+  a lockstep mismatch — or worse, worked in sim and misbehaved on HW.
+- **Root cause:** in `ooo_cpu.v` the load-value mux gave `sq_qhit`
+  priority over the `p2_isio` device-read path. Store-to-load forwarding
+  is a RAM concept; for device registers the store's side effect (mask,
+  drop, trigger) is applied by the device, so the forwarded raw word is
+  simply not the value a program-order read returns.
+- **How caught:** design review of the NPU integration (D014) — the NPU's
+  read-back registers made the same-word store→load case a certainty
+  instead of a curiosity.
+- **Fix:** IO-region loads (0x4 and 0x5) replay until every older store
+  has drained from the SQ (new `q_older` output; existing replay path).
+  When such a load finally performs, an SQ hit is impossible by
+  construction — asserted in sim. Covered by `sw/ctests/npu_basic.c`
+  (write→read-back sequences) under lockstep on both cores.
+
 ## B009 — OoO store queue never allocates a slot1-only store — FIXED (2026-07-03)
 
 - **Symptom:** first OoO regression: `store_fwd` load returns 0 instead
@@ -162,4 +213,13 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
   rs1/rs2-valid flags; measure the IPC delta when CoreMark runs.
 - **MMIO registers are word-access-only:** sub-word loads/stores to
   0x4xxxxxxx bypass the dmem lane logic and hit the raw MMIO registers.
-  C code must use `volatile uint32_t*` for MMIO (normal practice).
+  C code must use `volatile uint32_t*` for MMIO (normal practice). Same
+  quirk for the NPU region 0x5xxxxxxx (covered by `npu_basic.c`).
+- **OoO IO loads are not ordered against older IO loads** (noted during
+  the D014 review): two loads of the SAME IO register can complete out
+  of program order when the older one's operands arrive late — an RVWMO
+  same-address read-read coherence violation, observable only for
+  externally-mutable registers (today: switches @ 0x40000004; all NPU
+  registers change only via this hart's stores, so the NPU is immune).
+  Zero effect in sim (switches tied to 0). The proper fix is load-load
+  age tracking — arrives with the LQ / speculative-loads stage.
