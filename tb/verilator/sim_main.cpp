@@ -23,11 +23,14 @@
 #include <cstring>
 #include <cstdlib>
 #include <memory>
+#include <deque>
 
 #include "Vcpu_pipeline.h"
 #include "Vcpu_pipeline___024root.h"
 #include "verilated.h"
 #include "verilated_fst_c.h"
+
+#include "iss.h"
 
 static const uint32_t MAGIC_EXIT_ADDR = 0x40000008u;
 // Sim console: any byte stored here is printed to stdout (ee_printf's
@@ -69,6 +72,37 @@ int main(int argc, char** argv) {
         const char* arg = ctx->commandArgsPlusMatch("verbose");
         if (arg && arg[0]) verbose = true;
     }
+
+    // --- golden-model lockstep ------------------------------------------
+    // Default ON whenever a program is loaded via +imem; +nolockstep
+    // disables it (e.g. for programs that intentionally diverge).
+    // Every retired instruction is compared against the ISS: retired pc,
+    // register writeback, and each store in program order.
+    auto iss = std::make_unique<Rv32Iss>();
+    bool lockstep = false;
+    {
+        std::string imem_path, dmem_path;
+        const char* arg = ctx->commandArgsPlusMatch("imem=");
+        if (arg && arg[0]) imem_path = arg + strlen("+imem=");
+        arg = ctx->commandArgsPlusMatch("dmem=");
+        if (arg && arg[0]) dmem_path = arg + strlen("+dmem=");
+        const char* off = ctx->commandArgsPlusMatch("nolockstep");
+        if (!imem_path.empty() && !(off && off[0])) {
+            if (!iss->load_hex(imem_path.c_str(), iss->imem)) {
+                printf("[lockstep] cannot read %s\n", imem_path.c_str());
+                return 1;
+            }
+            if (!dmem_path.empty()
+                && !iss->load_hex(dmem_path.c_str(), iss->dmem)) {
+                printf("[lockstep] cannot read %s\n", dmem_path.c_str());
+                return 1;
+            }
+            lockstep = true;
+        }
+    }
+    struct StoreEvt { uint32_t addr, data, funct3; };
+    std::deque<StoreEvt> rtl_stores;
+    uint64_t compared = 0;
 
     uint64_t t = 0;  // trace timestamp (half-cycles)
     auto half_tick = [&](uint8_t clk) {
@@ -121,6 +155,60 @@ int main(int argc, char** argv) {
             putchar((int)(r->cpu_pipeline__DOT__rs2_dataM & 0xFF));
             fflush(stdout);
         }
+
+        // Lockstep: queue stores as they appear in MEM (one cycle before
+        // that instruction retires), then compare at retirement.
+        if (lockstep) {
+            if (r->cpu_pipeline__DOT__MemWriteM) {
+                rtl_stores.push_back({r->cpu_pipeline__DOT__alu_resultM,
+                                      r->cpu_pipeline__DOT__rs2_dataM,
+                                      r->cpu_pipeline__DOT__funct3M});
+            }
+            if (r->cpu_pipeline__DOT__validW) {
+                const uint32_t rtl_pc = r->cpu_pipeline__DOT__pcW;
+                iss->step(r->cpu_pipeline__DOT__resultW);
+                const auto& e = iss->eff;
+                const bool rtl_wr = r->cpu_pipeline__DOT__RegWriteW
+                                    && r->cpu_pipeline__DOT__rdW != 0;
+                bool bad = false;
+                if (rtl_pc != e.pc) bad = true;
+                if (rtl_wr != e.wrote_rd) bad = true;
+                if (rtl_wr && e.wrote_rd
+                    && (r->cpu_pipeline__DOT__rdW != e.rd
+                        || r->cpu_pipeline__DOT__resultW != e.rd_val))
+                    bad = true;
+                if (e.is_store) {
+                    if (rtl_stores.empty()) {
+                        bad = true;
+                    } else {
+                        const StoreEvt s = rtl_stores.front();
+                        rtl_stores.pop_front();
+                        if (s.addr != e.st_addr || s.data != e.st_data
+                            || (s.funct3 & 3) != (e.st_funct3 & 3))
+                            bad = true;
+                    }
+                }
+                if (bad) {
+                    printf("\n[lockstep] MISMATCH at cycle %llu "
+                           "(%llu instructions compared)\n",
+                           (unsigned long long)cycle,
+                           (unsigned long long)compared);
+                    printf("  RTL: pc=0x%08x rd=x%u wr=%d val=0x%08x\n",
+                           rtl_pc, (unsigned)r->cpu_pipeline__DOT__rdW,
+                           (int)rtl_wr, r->cpu_pipeline__DOT__resultW);
+                    printf("  ISS: pc=0x%08x rd=x%u wr=%d val=0x%08x "
+                           "instr=0x%08x\n",
+                           e.pc, e.rd, (int)e.wrote_rd, e.rd_val, e.instr);
+                    if (e.is_store)
+                        printf("  ISS store: [0x%08x] <= 0x%08x (f3=%u)\n",
+                               e.st_addr, e.st_data, e.st_funct3);
+                    if (tfp) tfp->close();
+                    top->final();
+                    return 3;
+                }
+                ++compared;
+            }
+        }
         if (r->cpu_pipeline__DOT__MemWriteM &&
             r->cpu_pipeline__DOT__alu_resultM == MAGIC_EXIT_ADDR) {
             uint32_t code = r->cpu_pipeline__DOT__rs2_dataM;
@@ -136,6 +224,10 @@ int main(int argc, char** argv) {
             break;
         }
     }
+
+    if (lockstep)
+        printf("[lockstep] %llu instructions compared against the golden "
+               "model, no divergence\n", (unsigned long long)compared);
 
     // Performance summary straight from the hardware counters (csr_file):
     // the same cycle/instret values software sees via rdcycle/rdinstret,

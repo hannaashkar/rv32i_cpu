@@ -414,7 +414,8 @@ module cpu_pipeline (
     wire        alu_zeroM;
     wire [31:0] branch_targetM;
     wire [4:0]  rdM;
-    wire [2:0]  funct3M;
+    wire [2:0]  funct3M /*verilator public_flat_rd*/;
+    wire [31:0] pcM;   // lockstep observability; pruned in synthesis
 
     ex_mem_reg EXMEM0 (
         .clk              (clk),
@@ -439,6 +440,7 @@ module cpu_pipeline (
         .branch_target_in (branch_targetE),
         .rd_in            (rdE),
         .funct3_in        (funct3E),
+        .pc_in            (pcE),
 
         // Outputs to MEM stage
         .RegWrite_out     (RegWriteM),
@@ -453,7 +455,8 @@ module cpu_pipeline (
         .zero_out         (alu_zeroM),
         .branch_target_out(branch_targetM),
         .rd_out           (rdM),
-        .funct3_out       (funct3M)
+        .funct3_out       (funct3M),
+        .pc_out           (pcM)
     );
 
     // ======================================================
@@ -535,6 +538,7 @@ module cpu_pipeline (
     wire [31:0] mem_dataW /*verilator public_flat_rd*/;
     wire [31:0] alu_resultW;
     wire        MemToRegW /*verilator public_flat_rd*/;
+    wire [31:0] pcW /*verilator public_flat_rd*/;  // lockstep: retired PC
 
     mem_wb_reg MEMWB0 (
         .clk           (clk),
@@ -549,6 +553,7 @@ module cpu_pipeline (
         .mem_data_in   (dmem_read_dataM),
         .alu_result_in (alu_resultM),
         .rd_in         (rdM),
+        .pc_in         (pcM),
 
         // Outputs to WB
         .RegWrite_out  (RegWriteW),
@@ -556,7 +561,8 @@ module cpu_pipeline (
         .valid_out     (validW),
         .mem_data_out  (mem_dataW),
         .alu_result_out(alu_resultW),
-        .rd_out        (rdW)
+        .rd_out        (rdW),
+        .pc_out        (pcW)
     );
 
     // ======================================================
