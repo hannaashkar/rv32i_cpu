@@ -14,7 +14,7 @@
 //     as the nearest legal operation.
 // ============================================================================
 module alu_control (
-    input  wire [1:0] ALUOp,      // operation class from control.v
+    input  wire [2:0] ALUOp,      // operation class from control.v
     input  wire [2:0] funct3,     // instruction funct3 field
     input  wire [6:0] funct7,     // instruction funct7 field (bit 5 used)
     output reg  [3:0] alu_control // operation for the ALU
@@ -27,8 +27,9 @@ module alu_control (
     always @(*) begin
         case (ALUOp)
 
-            ALUCLASS_ADD: alu_control = ALU_ADD;   // load/store address
-            ALUCLASS_SUB: alu_control = ALU_SUB;   // branch compare
+            ALUCLASS_ADD:   alu_control = ALU_ADD;    // address add / AUIPC
+            ALUCLASS_SUB:   alu_control = ALU_SUB;    // legacy compare
+            ALUCLASS_PASSB: alu_control = ALU_PASS_B; // LUI
 
             // R-type and I-type ALU operations: funct3 selects the op.
             ALUCLASS_RTYPE,

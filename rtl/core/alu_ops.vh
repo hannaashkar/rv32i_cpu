@@ -17,8 +17,10 @@ localparam [3:0] ALU_SRA    = 4'd9;   // shift right arithmetic
 localparam [3:0] ALU_PASS_B = 4'd10;  // result = b (LUI, decision D009)
 
 // Operation-class encoding produced by control.v (replaces textbook ALUOp):
-localparam [1:0] ALUCLASS_ADD    = 2'b00; // loads/stores: address add
-localparam [1:0] ALUCLASS_SUB    = 2'b01; // branches: compare (until B2)
-localparam [1:0] ALUCLASS_RTYPE  = 2'b10; // decode funct3 + instr[30]
-localparam [1:0] ALUCLASS_ITYPE  = 2'b11; // decode funct3; instr[30] only
-                                          // for shift-right (SRLI/SRAI)
+localparam [2:0] ALUCLASS_ADD    = 3'b000; // loads/stores/AUIPC/JALR: add
+localparam [2:0] ALUCLASS_SUB    = 3'b001; // legacy compare class (unused
+                                           // since branch_unit, D007/B2)
+localparam [2:0] ALUCLASS_RTYPE  = 3'b010; // decode funct3 + instr[30]
+localparam [2:0] ALUCLASS_ITYPE  = 3'b011; // decode funct3; instr[30] only
+                                           // for shift-right (SRLI/SRAI)
+localparam [2:0] ALUCLASS_PASSB  = 3'b100; // LUI: result = immediate

@@ -91,8 +91,9 @@ module cpu_pipeline (
     wire       MemWriteD;
     wire       MemToRegD;
     wire       ALUSrcD;
+    wire       ALUAPcD;
     wire       BranchD;
-    wire [1:0] ALUOpD;
+    wire [2:0] ALUOpD;
 
     // Control unit (opcode-level decoding)
     control CU (
@@ -102,6 +103,7 @@ module cpu_pipeline (
         .MemWrite (MemWriteD),
         .MemToReg (MemToRegD),
         .ALUSrc   (ALUSrcD),
+        .ALUAPc   (ALUAPcD),
         .Branch   (BranchD),
         .ALUOp    (ALUOpD)
     );
@@ -149,8 +151,9 @@ module cpu_pipeline (
     wire       MemWriteE;
     wire       MemToRegE;
     wire       ALUSrcE;
+    wire       ALUAPcE;
     wire       BranchE /*verilator public_flat_rd*/;
-    wire [1:0] ALUOpE;
+    wire [2:0] ALUOpE;
 
     wire [31:0] pcE /*verilator public_flat_rd*/;
     wire [31:0] rs1_dataE;
@@ -175,6 +178,7 @@ module cpu_pipeline (
         .MemWrite_in (MemWriteD),
         .MemToReg_in (MemToRegD),
         .ALUSrc_in   (ALUSrcD),
+        .ALUAPc_in   (ALUAPcD),
         .Branch_in   (BranchD),
         .ALUOp_in    (ALUOpD),
 
@@ -195,6 +199,7 @@ module cpu_pipeline (
         .MemWrite_out(MemWriteE),
         .MemToReg_out(MemToRegE),
         .ALUSrc_out  (ALUSrcE),
+        .ALUAPc_out  (ALUAPcE),
         .Branch_out  (BranchE),
         .ALUOp_out   (ALUOpE),
 
@@ -243,9 +248,12 @@ module cpu_pipeline (
     // Final B input to ALU: either forwarded rs2 or immediate
     assign alu_bE = (ALUSrcE) ? immE : rs2_fwd_base;
 
+    // Operand A: pc for AUIPC (decision D009/D1; jumps reuse this path)
+    wire [31:0] alu_aE = ALUAPcE ? pcE : rs1_fwdE;
+
     // ALU instance
     alu ALU0 (
-        .a          (rs1_fwdE),
+        .a          (alu_aE),
         .b          (alu_bE),
         .alu_control(alu_controlE),
         .result     (alu_resultE),

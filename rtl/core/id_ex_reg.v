@@ -13,8 +13,9 @@ module id_ex_reg (
     input        MemWrite_in,
     input        MemToReg_in,
     input        ALUSrc_in,
+    input        ALUAPc_in,   // operand A = pc (AUIPC / jump link path)
     input        Branch_in,
-    input  [1:0] ALUOp_in,
+    input  [2:0] ALUOp_in,
 
     // -------------------------------
     // Data and instruction fields from ID stage
@@ -41,8 +42,9 @@ module id_ex_reg (
     output reg        MemWrite_out,
     output reg        MemToReg_out,
     output reg        ALUSrc_out,
+    output reg        ALUAPc_out,
     output reg        Branch_out,
-    output reg [1:0]  ALUOp_out,
+    output reg [2:0]  ALUOp_out,
 
     output reg [31:0] pc_out,
     output reg [31:0] rs1_data_out,
@@ -71,6 +73,7 @@ module id_ex_reg (
             MemWrite_out      <= 0;
             MemToReg_out      <= 0;
             ALUSrc_out        <= 0;
+            ALUAPc_out        <= 0;
             Branch_out        <= 0;
             ALUOp_out         <= 0;
 
@@ -97,6 +100,7 @@ module id_ex_reg (
             MemWrite_out      <= 0;
             MemToReg_out      <= 0;
             ALUSrc_out        <= 0;
+            ALUAPc_out        <= 0;
             Branch_out        <= 0;
             ALUOp_out         <= 0;
 
@@ -122,6 +126,7 @@ module id_ex_reg (
             MemWrite_out      <= MemWrite_in;
             MemToReg_out      <= MemToReg_in;
             ALUSrc_out        <= ALUSrc_in;
+            ALUAPc_out        <= ALUAPc_in;
             Branch_out        <= Branch_in;
             ALUOp_out         <= ALUOp_in;
 

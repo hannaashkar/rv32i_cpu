@@ -47,6 +47,16 @@ module sign_extend (
             end
 
             // -------------------------------------------------
+            // U-type immediate (LUI, AUIPC)
+            // imm = {instr[31:12], 12'b0} — no sign extension needed,
+            // bit 31 lands in the result's bit 31 directly
+            // -------------------------------------------------
+            7'b0110111,          // LUI
+            7'b0010111: begin    // AUIPC
+                imm_ext = {instruction[31:12], 12'b0};
+            end
+
+            // -------------------------------------------------
             // Unsupported opcodes → default to 0
             // -------------------------------------------------
             default: begin
