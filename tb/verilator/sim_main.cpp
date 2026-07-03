@@ -30,6 +30,9 @@
 #include "verilated_fst_c.h"
 
 static const uint32_t MAGIC_EXIT_ADDR = 0x40000008u;
+// Sim console: any byte stored here is printed to stdout (ee_printf's
+// backend). mmio.v ignores the address, so programs run unmodified on HW.
+static const uint32_t MAGIC_PUTC_ADDR = 0x40000010u;
 
 // Legacy Verilator time hook. Declared weak in verilated.cpp, but MinGW's
 // linker does not resolve weak externals, so provide it explicitly.
@@ -113,6 +116,11 @@ int main(int argc, char** argv) {
                    r->cpu_pipeline__DOT__alu_resultM,
                    r->cpu_pipeline__DOT__rs2_dataM,
                    r->cpu_pipeline__DOT__pcF);
+        if (r->cpu_pipeline__DOT__MemWriteM &&
+            r->cpu_pipeline__DOT__alu_resultM == MAGIC_PUTC_ADDR) {
+            putchar((int)(r->cpu_pipeline__DOT__rs2_dataM & 0xFF));
+            fflush(stdout);
+        }
         if (r->cpu_pipeline__DOT__MemWriteM &&
             r->cpu_pipeline__DOT__alu_resultM == MAGIC_EXIT_ADDR) {
             uint32_t code = r->cpu_pipeline__DOT__rs2_dataM;

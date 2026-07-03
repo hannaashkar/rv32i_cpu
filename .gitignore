@@ -24,6 +24,8 @@ sw/**/*.bin
 sw/**/*.hex
 sw/**/*.map
 !sw/demo/*.hex
+coremark.log
+sw/coremark/.cm_flags_stamp
 
 # Editor / backup noise
 *.bak

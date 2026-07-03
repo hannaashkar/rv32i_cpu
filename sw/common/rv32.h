@@ -11,9 +11,12 @@
 #include <stddef.h>
 
 // --- MMIO -------------------------------------------------------------------
-#define MMIO_LEDS     (*(volatile uint32_t *)0x40000000u)
-#define MMIO_SWITCHES (*(volatile uint32_t *)0x40000004u)
-#define MMIO_SIM_EXIT (*(volatile uint32_t *)0x40000008u)  // 1=PASS, else fail
+#define MMIO_LEDS        (*(volatile uint32_t *)0x40000000u)
+#define MMIO_SWITCHES    (*(volatile uint32_t *)0x40000004u)
+#define MMIO_SIM_EXIT    (*(volatile uint32_t *)0x40000008u) // 1=PASS, else fail
+#define MMIO_SIM_CONSOLE (*(volatile uint32_t *)0x40000010u) // sim putchar
+// SIM_EXIT and SIM_CONSOLE are harness conventions: the Verilator TB snoops
+// the store bus for these addresses; mmio.v ignores them (no-op on FPGA).
 
 // --- performance counters ----------------------------------------------------
 static inline uint32_t rdcycle(void) {
