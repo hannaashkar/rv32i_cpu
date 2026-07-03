@@ -91,8 +91,6 @@ module cpu_pipeline (
     wire       BranchD;
     wire [1:0] ALUOpD;
 
-    wire [31:0] debug_x3; // For FPGA LED debugging
-
     // Control unit (opcode-level decoding)
     control CU (
         .opcode   (opcodeD),
@@ -127,9 +125,7 @@ module cpu_pipeline (
         .rs1_addr (rs1D),
         .rs1_data (rs1_dataD),
         .rs2_addr (rs2D),
-        .rs2_data (rs2_dataD),
-
-        .debug_x3(debug_x3)
+        .rs2_data (rs2_dataD)
     );
 
     // Sign-extend immediate generator
@@ -461,13 +457,10 @@ module cpu_pipeline (
     assign resultW = MemToRegW ? mem_dataW : alu_resultW;
 
     // ======================================================
-    // FPGA Debug / IO Mapping
+    // FPGA IO Mapping
     // ======================================================
 
-    // Optionally: show x3 on LEDs for debugging
-    // assign leds = debug_x3[9:0];
-
-    // In the final version, LEDs are fully memory-mapped via MMIO
+    // LEDs are fully memory-mapped via MMIO
     assign leds = leds_mmio;
 
 endmodule
