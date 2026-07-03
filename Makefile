@@ -207,8 +207,39 @@ regress-rand: $(SIM_BIN)
 	    $$pass $(RAND_SEEDS) $(RAND_LEN); \
 	[ $$fail -eq 0 ]
 
+# --- official riscv-tests rv32ui ISA suite (lockstep-checked too) -------------
+# Vendored unmodified from riscv-software-src/riscv-tests; our environment
+# header lives in sw/riscv-tests/env. Excluded: fence_i (Harvard imem has
+# no store path to instruction memory), ma_data (no traps; misaligned lane
+# behavior is documented SoC-specific).
+RVT_DIR  := sw/riscv-tests
+RVT_SRCS := $(wildcard $(RVT_DIR)/rv32ui/*.S)
+RVT_HEX  := $(patsubst %.S,%.text.hex,$(RVT_SRCS)) \
+            $(patsubst %.S,%.data.hex,$(RVT_SRCS))
+
+$(RVT_DIR)/rv32ui/%.elf: $(RVT_DIR)/rv32ui/%.S $(RVT_DIR)/rv64ui/%.S \
+                         $(RVT_DIR)/env/riscv_test.h \
+                         $(RVT_DIR)/macros/test_macros.h sw/common/link.ld
+	$(RISCV_GCC) $(SW_CFLAGS) -I$(RVT_DIR)/env -I$(RVT_DIR)/macros -o $@ $<
+
+.PRECIOUS: $(RVT_DIR)/rv32ui/%.elf
+
+regress-isa: $(SIM_BIN) $(RVT_HEX)
+	@pass=0; fail=0; \
+	for s in $(RVT_DIR)/rv32ui/*.S; do \
+	  b=$${s%.S}; \
+	  if out=$$(./$(SIM_BIN) +imem=$$b.text.hex +dmem=$$b.data.hex); then \
+	    pass=$$((pass+1)); \
+	  else \
+	    fail=$$((fail+1)); printf 'FAIL  %s : %s\n' "$$b" "$$out"; \
+	  fi; \
+	done; \
+	printf 'regress-isa: %d/%d riscv-tests rv32ui passed\n' \
+	    $$pass $$((pass+fail)); \
+	[ $$fail -eq 0 ]
+
 # Umbrella: everything that must be green before merging to main
-verify: regress regress-rand
+verify: regress regress-isa regress-rand
 
 run: $(SIM_BIN)
 	./$(SIM_BIN) +imem=$(PROG) $(DMEM_ARG)
