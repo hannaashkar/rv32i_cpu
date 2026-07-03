@@ -41,31 +41,23 @@ This project implements a RISC-V RV32I compatible CPU from scratch using:
 The CPU can run on simulation or on a Terasic DE10-Lite FPGA.
 
 📂 Project Structure
-src/
-   cpu_pipeline.v
-   pc.v
-   imem.v
-   dmem.v
-   register_file.v
-   alu.v
-   alu_control.v
-   control.v
-   sign_extend.v
-   hazard_unit.v
-   forwarding_unit.v
-   branch_predictor.v
-   if_id_reg.v
-   id_ex_reg.v
-   ex_mem_reg.v
-   mem_wb_reg.v
+rtl/
+   core/          # 5-stage pipeline: cpu_pipeline.v, pipeline registers,
+                  # control, ALU, register file, hazard/forwarding units,
+                  # branch predictor
+   mem/           # imem.v, dmem.v
+   soc/           # mmio.v (LEDs / switches)
+   top/           # de10_top.v (DE10-Lite board wrapper)
 
-sim/
-   cpu_pipeline_tb.v
-   run.do
+tb/
+   legacy/        # original ModelSim testbench
+   verilator/     # Verilator C++ test harness
 
-docs/
-   pipeline-diagram.png
-   block-diagram.png
+sw/               # test programs (asm / C)
+
+synth/            # Quartus project (rv32i_cpu.qpf / .qsf) for DE10-Lite
+
+docs/             # BUGLOG.md, DECISIONS.md, baseline measurements
 
 README.md
 

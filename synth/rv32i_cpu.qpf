@@ -1,0 +1,8 @@
+# Quartus Prime Project File
+# rv32i_cpu — 5-stage pipelined RV32I core on Terasic DE10-Lite (MAX 10)
+
+QUARTUS_VERSION = "20.1"
+
+# Revisions
+
+PROJECT_REVISION = "rv32i_cpu"

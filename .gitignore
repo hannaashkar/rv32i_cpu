@@ -1,0 +1,33 @@
+# Quartus build artifacts
+synth/db/
+synth/incremental_db/
+synth/output_files/
+*.qws
+*.qar
+*.qarlog
+*.rpt
+*.summary
+
+# Simulation build
+tb/verilator/obj_dir/
+build/
+*.vcd
+*.fst
+*.wlf
+transcript
+work/
+
+# Software build
+sw/**/*.o
+sw/**/*.elf
+sw/**/*.bin
+sw/**/*.hex
+sw/**/*.map
+
+# Editor / backup noise
+*.bak
+*.orig
+*~
+
+# Session bookkeeping (not project content)
+.remember/
