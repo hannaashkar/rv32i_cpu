@@ -14,8 +14,23 @@ module sign_extend (
             // imm[31:20] → sign-extended to 32 bits
             // -------------------------------------------------
             7'b0010011,          // I-type ALU
-            7'b0000011: begin    // I-type load (LW)
+            7'b0000011,          // I-type load (LW)
+            7'b1100111: begin    // JALR (I-type offset)
                 imm_ext = {{20{instruction[31]}}, instruction[31:20]};
+            end
+
+            // -------------------------------------------------
+            // J-type immediate (JAL)
+            // imm[20|10:1|11|19:12] scattered as:
+            // instr[31] | instr[19:12] | instr[20] | instr[30:21] | 0
+            // -------------------------------------------------
+            7'b1101111: begin    // JAL
+                imm_ext = {{11{instruction[31]}},
+                           instruction[31],
+                           instruction[19:12],
+                           instruction[20],
+                           instruction[30:21],
+                           1'b0};
             end
 
             // -------------------------------------------------

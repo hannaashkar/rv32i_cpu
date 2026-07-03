@@ -23,6 +23,8 @@ module control (
     output reg        ALUSrc,   // Operand B: immediate instead of rs2
     output reg        ALUAPc,   // Operand A: pc instead of rs1 (AUIPC)
     output reg        Branch,   // Marks instruction as a conditional branch
+    output reg        Jal,      // JAL: unconditional jump, target = pc+imm
+    output reg        Jalr,     // JALR: unconditional jump, target = rs1+imm
     output reg [2:0]  ALUOp     // ALU operation class (alu_ops.vh)
 );
 
@@ -37,6 +39,8 @@ module control (
         ALUSrc   = 1'b0;
         ALUAPc   = 1'b0;
         Branch   = 1'b0;
+        Jal      = 1'b0;
+        Jalr     = 1'b0;
         ALUOp    = ALUCLASS_ADD;
 
         case (opcode)
@@ -94,6 +98,24 @@ module control (
                 RegWrite = 1'b1;
                 ALUSrc   = 1'b1;               // operand B = U-immediate
                 ALUAPc   = 1'b1;               // operand A = pc
+                ALUOp    = ALUCLASS_ADD;
+            end
+
+            7'b1101111: begin
+                // JAL: rd = pc+4, jump to pc + J-immediate.
+                // Target uses the EX branch-target adder; the jump rides
+                // the mispredict/redirect path and trains the BTB
+                // (decision D008/C1).
+                RegWrite = 1'b1;
+                Jal      = 1'b1;
+            end
+
+            7'b1100111: begin
+                // JALR: rd = pc+4, jump to (rs1 + I-immediate) & ~1.
+                // The ALU computes the target (rs1 forwarded normally).
+                RegWrite = 1'b1;
+                Jalr     = 1'b1;
+                ALUSrc   = 1'b1;
                 ALUOp    = ALUCLASS_ADD;
             end
 

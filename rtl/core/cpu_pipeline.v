@@ -93,6 +93,8 @@ module cpu_pipeline (
     wire       ALUSrcD;
     wire       ALUAPcD;
     wire       BranchD;
+    wire       JalD;
+    wire       JalrD;
     wire [2:0] ALUOpD;
 
     // Control unit (opcode-level decoding)
@@ -105,6 +107,8 @@ module cpu_pipeline (
         .ALUSrc   (ALUSrcD),
         .ALUAPc   (ALUAPcD),
         .Branch   (BranchD),
+        .Jal      (JalD),
+        .Jalr     (JalrD),
         .ALUOp    (ALUOpD)
     );
 
@@ -153,6 +157,8 @@ module cpu_pipeline (
     wire       ALUSrcE;
     wire       ALUAPcE;
     wire       BranchE /*verilator public_flat_rd*/;
+    wire       JalE;
+    wire       JalrE;
     wire [2:0] ALUOpE;
 
     wire [31:0] pcE /*verilator public_flat_rd*/;
@@ -180,6 +186,8 @@ module cpu_pipeline (
         .ALUSrc_in   (ALUSrcD),
         .ALUAPc_in   (ALUAPcD),
         .Branch_in   (BranchD),
+        .Jal_in      (JalD),
+        .Jalr_in     (JalrD),
         .ALUOp_in    (ALUOpD),
 
         // Operands and instruction fields
@@ -201,6 +209,8 @@ module cpu_pipeline (
         .ALUSrc_out  (ALUSrcE),
         .ALUAPc_out  (ALUAPcE),
         .Branch_out  (BranchE),
+        .Jal_out     (JalE),
+        .Jalr_out    (JalrE),
         .ALUOp_out   (ALUOpE),
 
         .pc_out      (pcE),
@@ -270,6 +280,7 @@ module cpu_pipeline (
 
     // Compute branch target (PC-relative) in EX stage
     wire [31:0] branch_targetE = pcE + immE;
+    wire [31:0] pc_plus4E     = pcE + 32'd4;
 
     // Branch condition from the dedicated comparator (decision D007/B2):
     // operates on the forwarded operands, independent of the ALU, and
@@ -287,6 +298,22 @@ module cpu_pipeline (
     assign branch_taken_ex = BranchE && branch_condE;
 
     // ======================================================
+    // Jumps (JAL/JALR — decision D008/C1)
+    // ======================================================
+    // Jumps are always taken. JAL's target comes from the branch-target
+    // adder (pc+imm); JALR's target is the ALU result (rs1+imm) with the
+    // LSB cleared as the ISA requires. rd receives pc+4 through the EX
+    // result mux below, so the WB path is unchanged.
+    wire        jumpE          = JalE | JalrE;
+    wire        redirect_instE = BranchE | jumpE;   // can change the PC
+    wire        actual_takenE  = branch_taken_ex | jumpE;
+    wire [31:0] actual_targetE = JalrE ? (alu_resultE & ~32'h1)
+                                       : branch_targetE;
+
+    // EX result: link value (pc+4) for jumps, ALU result otherwise
+    wire [31:0] ex_resultE = jumpE ? pc_plus4E : alu_resultE;
+
+    // ======================================================
     // Branch Predictor (BHT + BTB)
     // ======================================================
     branch_predictor BP0 (
@@ -299,29 +326,31 @@ module cpu_pipeline (
         .pred_takenF    (pred_takenF),
         .pred_targetF   (pred_targetF),
 
-        // EX-stage update (correction)
-        .BranchE        (BranchE),
+        // EX-stage update (correction) — jumps train the predictor too,
+        // so repeat JAL/JALR encounters redirect from IF for free
+        .BranchE        (redirect_instE),
         .pcE            (pcE),
-        .branch_takenE  (branch_taken_ex),
-        .branch_targetE (branch_targetE)
+        .branch_takenE  (actual_takenE),
+        .branch_targetE (actual_targetE)
     );
 
     // ======================================================
     // Misprediction Detection (EX Stage)
     // ======================================================
 
-    // pred_takenE / pred_targetE are the predictor's view of this branch
+    // pred_takenE / pred_targetE are the predictor's view of this
+    // instruction; branches AND jumps are checked the same way
     wire mispredictE /*verilator public_flat_rd*/;
     assign mispredictE =
-        BranchE && (
-            (branch_taken_ex != pred_takenE) ||                     // wrong direction
-            (branch_taken_ex && (branch_targetE != pred_targetE))   // or wrong target
+        redirect_instE && (
+            (actual_takenE != pred_takenE) ||                     // wrong direction
+            (actual_takenE && (actual_targetE != pred_targetE))   // or wrong target
         );
 
     // Correct next PC if prediction was wrong
     wire [31:0] next_pc_correctE;
     assign next_pc_correctE =
-        branch_taken_ex ? branch_targetE : (pcE + 32'd4);
+        actual_takenE ? actual_targetE : pc_plus4E;
 
     // Global next PC selection: corrected PC vs. predicted PC
     assign next_pcF = mispredictE ? next_pc_correctE
@@ -352,8 +381,9 @@ module cpu_pipeline (
         .MemToReg_in      (MemToRegE),
         .Branch_in        (BranchE),
 
-        // Data signals
-        .alu_result_in    (alu_resultE),
+        // Data signals. ex_resultE = pc+4 for jumps (link value), ALU
+        // result otherwise — so jump links forward like any ALU result.
+        .alu_result_in    (ex_resultE),
         // Store data must be the FORWARDED rs2, not the raw ID/EX value —
         // otherwise a store right after its producer writes stale data
         // (BUGLOG B007, decision D011/F1)
