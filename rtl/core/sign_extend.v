@@ -12,10 +12,14 @@ module sign_extend (
             // -------------------------------------------------
             // I-type immediate (ADDI, ANDI, ORI, LW, etc.)
             // imm[31:20] → sign-extended to 32 bits
+            // SYSTEM rides this path too: instr[31:20] is the CSR
+            // address, so csr_file receives it as immE[11:0] without
+            // a dedicated bus (the sign-extended upper bits are unused).
             // -------------------------------------------------
             7'b0010011,          // I-type ALU
             7'b0000011,          // I-type load (LW)
-            7'b1100111: begin    // JALR (I-type offset)
+            7'b1100111,          // JALR (I-type offset)
+            7'b1110011: begin    // SYSTEM (CSR address in imm[11:0])
                 imm_ext = {{20{instruction[31]}}, instruction[31:20]};
             end
 

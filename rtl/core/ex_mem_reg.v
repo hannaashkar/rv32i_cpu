@@ -10,6 +10,7 @@ module ex_mem_reg (
     input        MemRead_in,
     input        MemWrite_in,
     input        Branch_in,
+    input        valid_in,           // real instruction, counted at retire (D012)
 
     // -----------------------------
     // Data signals from EX stage
@@ -29,6 +30,7 @@ module ex_mem_reg (
     output reg        MemRead_out,
     output reg        MemWrite_out,
     output reg        Branch_out,
+    output reg        valid_out,
 
     output reg [31:0] alu_result_out,
     output reg [31:0] rs2_data_out,
@@ -50,6 +52,7 @@ module ex_mem_reg (
             MemRead_out       <= 0;
             MemWrite_out      <= 0;
             Branch_out        <= 0;
+            valid_out         <= 0;
 
             alu_result_out    <= 0;
             rs2_data_out      <= 0;
@@ -64,6 +67,7 @@ module ex_mem_reg (
             MemRead_out       <= MemRead_in;
             MemWrite_out      <= MemWrite_in;
             Branch_out        <= Branch_in;
+            valid_out         <= valid_in;
 
             // Capture data signals
             alu_result_out    <= alu_result_in;

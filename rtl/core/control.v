@@ -3,18 +3,22 @@
 //
 // Purpose:    Classify the instruction by opcode and produce the pipeline
 //             control signals carried down ID/EX.
-// Interfaces: opcode -> {RegWrite, MemRead, MemWrite, MemToReg, ALUSrc,
-//             ALUAPc, Branch, ALUOp}.
+// Interfaces: opcode (+funct3 for SYSTEM only) -> {RegWrite, MemRead,
+//             MemWrite, MemToReg, ALUSrc, ALUAPc, Branch, Jal, Jalr, Csr,
+//             ALUOp}.
 //             ALUOp is the 3-bit operation CLASS (see alu_ops.vh);
 //             alu_control refines it with funct3/funct7 in EX.
 //             ALUAPc = 1 routes pcE into ALU operand A (AUIPC; jumps reuse
 //             this path, decision D009/D1).
+//             funct3 is consulted ONLY for the SYSTEM opcode, where it
+//             separates CSR instructions (Zicsr) from ECALL/EBREAK.
 // Assumptions:
 //   * Unsupported opcodes decode as NOPs — illegal-instruction traps are a
-//     later stage.
+//     later stage. ECALL/EBREAK also decode as NOPs until traps exist.
 // ============================================================================
 module control (
     input  wire [6:0] opcode,   // Opcode field from the instruction
+    input  wire [2:0] funct3,   // Only used to sub-decode SYSTEM (CSR vs ECALL)
 
     output reg        RegWrite, // Enable register file writeback
     output reg        MemRead,  // Enable memory read (for loads)
@@ -25,6 +29,7 @@ module control (
     output reg        Branch,   // Marks instruction as a conditional branch
     output reg        Jal,      // JAL: unconditional jump, target = pc+imm
     output reg        Jalr,     // JALR: unconditional jump, target = rs1+imm
+    output reg        Csr,      // CSR instruction (Zicsr): rd = old CSR value
     output reg [2:0]  ALUOp     // ALU operation class (alu_ops.vh)
 );
 
@@ -41,6 +46,7 @@ module control (
         Branch   = 1'b0;
         Jal      = 1'b0;
         Jalr     = 1'b0;
+        Csr      = 1'b0;
         ALUOp    = ALUCLASS_ADD;
 
         case (opcode)
@@ -117,6 +123,19 @@ module control (
                 Jalr     = 1'b1;
                 ALUSrc   = 1'b1;
                 ALUOp    = ALUCLASS_ADD;
+            end
+
+            7'b1110011: begin
+                // SYSTEM. funct3 != 000 are the six CSR instructions
+                // (CSRRW/S/C and their immediate forms — decision D012):
+                // rd gets the old CSR value through the EX result mux;
+                // csr_file handles the read-modify-write in EX.
+                // funct3 == 000 (ECALL/EBREAK) stays a NOP until the trap
+                // stage exists.
+                if (funct3 != 3'b000) begin
+                    RegWrite = 1'b1;
+                    Csr      = 1'b1;
+                end
             end
 
             default: begin

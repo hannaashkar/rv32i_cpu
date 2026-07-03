@@ -86,6 +86,7 @@ set_global_assignment -name VERILOG_FILE ../rtl/core/branch_predictor.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/branch_unit.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/control.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/cpu_pipeline.v
+set_global_assignment -name VERILOG_FILE ../rtl/core/csr_file.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/ex_mem_reg.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/forwarding_unit.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/hazard_unit.v

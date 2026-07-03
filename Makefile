@@ -48,7 +48,9 @@ VFLAGS := --cc --exe --build -j 0 --top-module $(TOP) --trace-fst -Wno-fatal \
           $(addprefix -I,$(RTL_DIRS))
 
 # --- software ----------------------------------------------------------------
-SW_CFLAGS := -march=rv32i -mabi=ilp32 -nostdlib -nostartfiles \
+# rv32i_zicsr: modern binutils gates CSR instructions (rdcycle, csrrw, ...)
+# behind the Zicsr extension in -march; the core implements it (D012)
+SW_CFLAGS := -march=rv32i_zicsr -mabi=ilp32 -nostdlib -nostartfiles \
              -T sw/common/link.ld
 SW_TESTS  := $(patsubst %.S,%.hex,$(wildcard sw/tests/*.S))
 

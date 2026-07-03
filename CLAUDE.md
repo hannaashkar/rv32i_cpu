@@ -91,13 +91,21 @@ the RTL**.
   redirect path with pc+4 linked through the EX result mux (D008/C1);
   LUI/AUIPC through the ALU with a pc operand-A mux (D009/D1); dmem does
   byte/half lanes + sign/zero extension via funct3 in MEM (D010/Eb).
-- **ISA: full RV32I user-level compute — all ALU ops + shifts, SLTU/SLTIU,
-  all six branches, JAL/JALR, LUI/AUIPC, LB/LBU/LH/LHU/LW, SB/SH/SW.**
-  Compiled C can run. Still missing: FENCE (safe to treat as NOP),
-  ECALL/EBREAK/traps, CSRs (next: cycle/instret for measurement), M ext.
-- Tests: `make regress` = 7 directed suites in `sw/tests/` (ALU incl. B004
+- **ISA: full RV32I user-level compute + Zicsr** — all ALU ops + shifts,
+  SLTU/SLTIU, all six branches, JAL/JALR, LUI/AUIPC, LB/LBU/LH/LHU/LW,
+  SB/SH/SW, CSRRW/S/C(+I). Compiled C can run. Still missing: FENCE (safe
+  to treat as NOP), ECALL/EBREAK/traps, M ext.
+- CSRs (D012): `csr_file` executes CSR ops in EX (nothing at EX can be
+  killed → writes commit safely); read returns via the EX result mux; CSR
+  address rides immE[11:0]. Implemented: cycle/cycleh, instret/instreth
+  (read-only; writes dropped until traps), mscratch (R/W). instret counts
+  a 1-bit `valid` flag flowing IF→WB (flushes/bubbles clear it) — exact
+  retirement counting; sim prints `cycles/instret/ipc` at exit from the
+  same counters software reads.
+- Tests: `make regress` = 8 directed suites in `sw/tests/` (ALU incl. B004
   regression, branches, jumps incl. BTB-stale return, LUI/AUIPC, sub-word
-  memory lanes/sign, store-forwarding, smoke). All green.
+  memory lanes/sign, store-forwarding, CSRs incl. exact instret deltas,
+  smoke). All green.
 - Memory: combinational imem/dmem (B006 BRAM rework deferred, D010);
   `SIM_BIG_MEM` (set by the Verilator build) gives 256 KB memories in sim
   while synthesis keeps 4 KB imem / 1 KB dmem.
@@ -138,8 +146,22 @@ the RTL**.
   the redirect path; Eb sub-word dmem with funct3 in MEM.
 - `make regress`: 7/7 suites green; quartus_map 0 errors throughout.
 
-**Next**: cycle/instret CSRs (rdcycle/rdinstret for measurement) →
-C runtime bring-up (crt0, linker layout for Harvard imem/dmem, +dmem
-data-image loading) → CoreMark port → baseline IPC → docs/BASELINE.md →
-tag v1.0-inorder-baseline. Consider porting riscv-tests rv32ui as the
-acceptance gate alongside.
+**2026-07-03 (later still)** — Zicsr scaffold + measurement counters
+(branch `csr-counters`, decision D012 — Hanna chose full scaffold +
+valid-bit retirement over the minimal options):
+- New `rtl/core/csr_file.v`: all six CSR forms execute in EX; cycle/
+  instret (64-bit, read-only) + mscratch (first writable CSR, proves the
+  write path). Unimplemented CSRs read 0; writes to read-only CSRs are
+  dropped until traps exist.
+- 1-bit `valid` flag added through all four pipeline regs; flushes and
+  bubbles clear it; instret increments on valid-at-WB. Exact by
+  construction — `sw/tests/csr_ops.S` checks instret deltas across a
+  deliberately-mispredicting loop (delta 15 exactly, 18 checks total).
+- Harness now prints `cycles/instret/ipc` at exit from the hardware
+  counters. Software builds with `-march=rv32i_zicsr`.
+- `make regress`: 8/8 green; quartus_map 0 errors / 9 warnings (unchanged).
+
+**Next**: C runtime bring-up (crt0, linker layout for Harvard imem/dmem,
++dmem data-image loading, elf→separate text/data hex) → CoreMark port →
+baseline IPC → docs/BASELINE.md → tag v1.0-inorder-baseline. Consider
+porting riscv-tests rv32ui as the acceptance gate alongside.
