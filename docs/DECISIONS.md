@@ -5,6 +5,56 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D011 — 2026-07-03 — B007 fix: latch forwarded store data only (F1)
+
+EX/MEM will capture `rs2_fwd_base` (the forwarded rs2) instead of raw
+`rs2_dataE`. The considered alternative — an extra WB→MEM store-data bypass
+that removes the `lw x5; sw x5` load-use stall — was declined for the
+baseline to keep MEM simple; can be revisited as an IPC optimization with
+its own measurement.
+
+## D010 — 2026-07-03 — Keep combinational memories for the baseline (Eb)
+
+Byte/half load-store support is added on top of the existing combinational
+imem/dmem. The synchronous-read/BRAM rework (fixes BUGLOG B006, changes
+fetch/load latency and the hazard window) is deliberately deferred to its
+own post-baseline stage, so the "before" measurements reflect today's
+microarchitecture and memory is only redesigned once, together with the
+PLL/timing work.
+
+## D009 — 2026-07-03 — LUI/AUIPC through the ALU (D1)
+
+U-type immediates go through the normal ALU path: LUI = pass-operand-B,
+AUIPC = ADD with a new pc-vs-rs1 mux on operand A. Avoids widening the WB
+mux; the operand-A pc mux is shared with jump/branch target logic.
+
+## D008 — 2026-07-03 — Jumps resolve in EX via the redirect path (C1)
+
+JAL target = pc+imm (existing branch-target adder), JALR target = ALU
+rs1+imm; rd receives pc+4. Jumps reuse the mispredict/redirect machinery
+and are added to the BTB, so repeat encounters are free; a first-seen jump
+costs the normal 2-cycle redirect. The early-JAL-in-ID alternative (1-cycle
+first-visit saving, extra PC mux + ID adder + hazard cases) was declined —
+the BTB erases most of its benefit.
+
+## D007 — 2026-07-03 — Dedicated branch comparator in EX (B2)
+
+Branch conditions (BEQ/BNE/BLT/BGE/BLTU/BGEU) come from a small dedicated
+comparator on the forwarded operands, not from ALU flags. ~70 extra LEs
+buys a shorter branch-resolve path (the EX redirect path is the current
+critical path) and the ALU/branch-unit split the future OoO core needs.
+
+## D006 — 2026-07-03 — ALU decode flattened to funct3-based scheme (A2)
+
+Replace the two-level ALUOp/alu_control decode with direct funct3-indexed
+operation select, instr[30] disambiguating ADD/SUB and SRL/SRA, and the
+opcode class gating whether funct7 participates at all. This makes bug
+B004 (immediate bits spoofing funct7 on I-type) structurally impossible,
+costs the same LEs as patching the old scheme (the barrel shifter
+dominates either way: shared reversed shifter, ~200 LEs), and produces the
+uop shape the OoO decoder will reuse. Full micro-op decode in ID (A3) was
+rejected as premature for the 1-wide baseline.
+
 ## D005 — 2026-07-03 — Remove debug_x3 instead of restoring it
 
 The repo shipped with a dangling `debug_x3` connection (see BUGLOG B001).
