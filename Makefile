@@ -82,6 +82,19 @@ sw/tests/%.elf: sw/tests/%.S sw/common/link.ld
 test: $(SIM_BIN) $(SW_TESTS)
 	./$(SIM_BIN) +imem=$(PROG)
 
+# Run every test program in sw/tests; fail if any fails
+regress: $(SIM_BIN) $(SW_TESTS)
+	@pass=0; fail=0; \
+	for h in sw/tests/*.hex; do \
+	  if out=$$(./$(SIM_BIN) +imem=$$h); then \
+	    pass=$$((pass+1)); printf 'PASS  %s\n' "$$h"; \
+	  else \
+	    fail=$$((fail+1)); printf 'FAIL  %s : %s\n' "$$h" "$$out"; \
+	  fi; \
+	done; \
+	printf 'regress: %d passed, %d failed\n' $$pass $$fail; \
+	[ $$fail -eq 0 ]
+
 run: $(SIM_BIN)
 	./$(SIM_BIN) +imem=$(PROG)
 

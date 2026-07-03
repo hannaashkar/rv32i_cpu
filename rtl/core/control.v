@@ -23,20 +23,25 @@ module control (
         case (opcode)
 
             7'b0110011: begin
-                // R-type ALU instructions (ADD, SUB, AND, OR, XOR, SLT, ...)
+                // R-type ALU instructions (ADD, SUB, AND, OR, XOR, SLT,
+                // SLTU, SLL, SRL, SRA)
                 RegWrite = 1'b1;      // write result back to rd
                 ALUSrc   = 1'b0;      // use register rs2
                 MemToReg = 1'b0;      // write ALU result
                 Branch   = 1'b0;
-                ALUOp    = 2'b10;     // use funct3/funct7 to choose ALU op
+                ALUOp    = 2'b10;     // ALUCLASS_RTYPE: funct3 + funct7[5]
             end
 
             7'b0010011: begin
-                // I-type ALU instructions (ADDI, ANDI, ORI, XORI, SLTI, ...)
+                // I-type ALU instructions (ADDI, ANDI, ORI, XORI, SLTI,
+                // SLTIU, SLLI, SRLI, SRAI)
                 RegWrite = 1'b1;
                 ALUSrc   = 1'b1;      // use immediate value
                 MemToReg = 1'b0;      // ALU result goes to rd
-                ALUOp    = 2'b10;     // same ALU decoding as R-type
+                ALUOp    = 2'b11;     // ALUCLASS_ITYPE: funct3 only, so
+                                      // immediate bits can't spoof funct7
+                                      // (BUGLOG B004); instr[30] still
+                                      // selects SRLI/SRAI as the ISA defines
             end
 
             7'b0000011: begin

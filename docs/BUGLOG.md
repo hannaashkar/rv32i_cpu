@@ -69,7 +69,7 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 - **Fix:** Use a PLL for the CPU clock + write a real .sdc. Prerequisite for
   any honest Fmax/IPC numbers. Deferred until after the Verilator baseline.
 
-## B004 — ADDI with imm[11:5] = 0100000 executes as SUB — OPEN
+## B004 — ADDI with imm[11:5] = 0100000 executes as SUB — FIXED (2026-07-03)
 
 - **Symptom:** `addi rd, rs1, imm` for imm in 1024–1055 subtracts instead of
   adds.
@@ -80,9 +80,11 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
   "is I-type" input (or funct7 masking) so SUB detection only applies to
   R-type (and later, SRAI's shamt[10] special case).
 - **How caught:** Code review of `control.v` + `alu_control.v` during repo
-  verification (2026-07-03). Not yet reproduced in simulation — no test
-  infrastructure existed.
-- **Fix:** Planned as part of RV32I completion.
+  verification (2026-07-03).
+- **Fix:** Decision D006/A2 — flattened funct3-based decode where the
+  I-type class ignores funct7 except for the ISA-defined SRLI/SRAI bit.
+  Regression check 2 in `sw/tests/alu_ops.S` (`addi x5, x0, 1024`)
+  reproduces the spoof pattern.
 
 ## B003 — ANDI/ORI/XORI/SLTI executed as ADD — FIXED (2025-12-10, by Hanna)
 
@@ -94,7 +96,7 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 - **Fix:** Merged in commit `0815273` ("Update control.v"). Note: the fix
   introduced B004.
 
-## B002 — Demo program never reaches the LED MMIO address — OPEN
+## B002 — Demo program never reaches the LED MMIO address — FIXED (2026-07-03)
 
 - **Symptom:** The hardcoded imem program comments claim
   `slli x2, x2, 28 → x2 = 0x40000000`, but the ALU has no shifter — SLLI
@@ -104,8 +106,10 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
   path; the demo program assumed they were.
 - **How caught:** Instruction-by-instruction trace of `imem.v` against
   `alu_control.v` during exploration (2026-07-02).
-- **Fix:** Shifts arrive with RV32I completion; the hardcoded imem is being
-  replaced by `$readmemh` program loading in the Verilator bring-up anyway.
+- **Fix:** Shifts implemented with the A2 decode rework. Verified in
+  simulation: the demo now stores an incrementing count to 0x40000000
+  (the LED register) — the FPGA demo will show a binary LED counter for
+  the first time.
 
 ## B001 — Repo did not compile: dangling debug_x3 connection — FIXED (2026-07-03)
 

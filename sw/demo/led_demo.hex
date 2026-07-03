@@ -1,11 +1,10 @@
-// led_demo.hex — the original hardcoded FPGA demo program, preserved as the
-// synthesis-default imem contents so the bitstream behaves exactly as before
-// the imem rework. Known-broken as a demo: the slli executes as ADD until
-// shifts are implemented, so the store never reaches the LED MMIO address
-// (BUGLOG B002).
+// led_demo.hex — the original FPGA demo program: increments x3 forever and
+// writes it to the LED MMIO register. Works since the A2 decode rework gave
+// the core real shifts (BUGLOG B002 fixed) — LEDs count in binary at the
+// divided clock rate.
 00100093 // addi x1, x0, 1
 00400113 // addi x2, x0, 4
-01C11113 // slli x2, x2, 28   (executes as ADD today)
+01C11113 // slli x2, x2, 28   -> x2 = 0x40000000
 001181B3 // add  x3, x3, x1
 00312023 // sw   x3, 0(x2)
 FE000AE3 // beq  x0, x0, -8

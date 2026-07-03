@@ -1,69 +1,52 @@
+// ============================================================================
+// alu_control — flat funct3-based ALU operation decode (decision D006/A2)
+//
+// Purpose:    Turn the operation class from control.v plus the instruction's
+//             funct fields into a concrete ALU operation.
+// Interfaces: ALUOp (2-bit class, see alu_ops.vh), funct3, funct7 -> alu_control.
+// Assumptions:
+//   * funct7 participates exactly where RV32I defines it:
+//       - R-type funct3=000: funct7[5] selects ADD/SUB
+//       - funct3=101 (both R- and I-type): funct7[5] selects SRL/SRA
+//       - I-type funct3=000 is ALWAYS ADDI — immediate bits can no longer
+//         spoof SUB (this decode structure is the fix for BUGLOG B004)
+//   * Illegal funct7 patterns are not yet detected (no traps); they decode
+//     as the nearest legal operation.
+// ============================================================================
 module alu_control (
-    input  wire [1:0] ALUOp,      // High-level ALU control coming from the main control unit
-    input  wire [2:0] funct3,     // funct3 field extracted from the instruction
-    input  wire [6:0] funct7,     // funct7 field (mainly used for ADD/SUB)
-    output reg  [3:0] alu_control // Operation code sent to the ALU
+    input  wire [1:0] ALUOp,      // operation class from control.v
+    input  wire [2:0] funct3,     // instruction funct3 field
+    input  wire [6:0] funct7,     // instruction funct7 field (bit 5 used)
+    output reg  [3:0] alu_control // operation for the ALU
 );
+
+`include "alu_ops.vh"
+
+    wire is_rtype = (ALUOp == ALUCLASS_RTYPE);
 
     always @(*) begin
         case (ALUOp)
 
-            2'b00: begin
-                // Load/store instructions always use ADD for address calculation
-                alu_control = 4'b0010;   // ADD
-            end
+            ALUCLASS_ADD: alu_control = ALU_ADD;   // load/store address
+            ALUCLASS_SUB: alu_control = ALU_SUB;   // branch compare
 
-            2'b01: begin
-                // Branch-equal uses subtraction to compare rs1 and rs2
-                alu_control = 4'b0110;   // SUB
-            end
-
-            2'b10: begin
-                // R-type and I-type ALU instructions → decode based on funct3/funct7
+            // R-type and I-type ALU operations: funct3 selects the op.
+            ALUCLASS_RTYPE,
+            ALUCLASS_ITYPE: begin
                 case (funct3)
-
-                    3'b000: begin
-                        // ADD / ADDI share funct3=000, SUB has same funct3 but funct7 is different
-                        if (funct7 == 7'b0100000) begin
-                            alu_control = 4'b0110; // SUB
-                        end else begin
-                            alu_control = 4'b0010; // ADD or ADDI
-                        end
-                    end
-
-                    3'b111: begin
-                        // AND / ANDI
-                        alu_control = 4'b0000;
-                    end
-
-                    3'b110: begin
-                        // OR / ORI
-                        alu_control = 4'b0001;
-                    end
-
-                    3'b100: begin
-                        // XOR / XORI
-                        alu_control = 4'b1100;
-                    end
-
-                    3'b010: begin
-                        // SLT and SLTI
-                        alu_control = 4'b0111;
-                    end
-
-                    default: begin
-                        // Fall back to ADD if we don't recognize the funct3
-                        alu_control = 4'b0010;
-                    end
-
+                    3'b000: alu_control = (is_rtype && funct7[5]) ? ALU_SUB
+                                                                  : ALU_ADD;
+                    3'b001: alu_control = ALU_SLL;
+                    3'b010: alu_control = ALU_SLT;
+                    3'b011: alu_control = ALU_SLTU;
+                    3'b100: alu_control = ALU_XOR;
+                    3'b101: alu_control = funct7[5] ? ALU_SRA : ALU_SRL;
+                    3'b110: alu_control = ALU_OR;
+                    3'b111: alu_control = ALU_AND;
                 endcase
             end
 
-            default: begin
-                // Safety fallback → treat unknown ALUOp as ADD
-                alu_control = 4'b0010;
-            end
-
+            default: alu_control = ALU_ADD;
         endcase
     end
 
