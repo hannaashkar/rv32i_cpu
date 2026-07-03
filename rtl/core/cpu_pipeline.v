@@ -107,9 +107,9 @@ module cpu_pipeline (
     );
 
     // Signals forwarded into Writeback
-    wire       RegWriteW;
-    wire [4:0] rdW;
-    wire [31:0] resultW;
+    wire       RegWriteW /*verilator public_flat_rd*/;
+    wire [4:0] rdW /*verilator public_flat_rd*/;
+    wire [31:0] resultW /*verilator public_flat_rd*/;
 
     // Register file — read in ID, write in WB
     wire [31:0] rs1_dataD;
@@ -149,10 +149,10 @@ module cpu_pipeline (
     wire       MemWriteE;
     wire       MemToRegE;
     wire       ALUSrcE;
-    wire       BranchE;
+    wire       BranchE /*verilator public_flat_rd*/;
     wire [1:0] ALUOpE;
 
-    wire [31:0] pcE;
+    wire [31:0] pcE /*verilator public_flat_rd*/;
     wire [31:0] rs1_dataE;
     wire [31:0] rs2_dataE;
     wire [31:0] immE;
@@ -218,13 +218,13 @@ module cpu_pipeline (
     // EX (Execute) Stage
     // ======================================================
     wire [3:0]  alu_controlE;
-    wire [31:0] rs1_fwdE;
+    wire [31:0] rs1_fwdE /*verilator public_flat_rd*/;
     wire [31:0] rs2_fwdE;
     wire [31:0] alu_bE;
     wire [31:0] alu_resultE;
-    wire        alu_zeroE;
+    wire        alu_zeroE /*verilator public_flat_rd*/;
 
-    wire [1:0]  forwardAE;
+    wire [1:0]  forwardAE /*verilator public_flat_rd*/;
     wire [1:0]  forwardBE;
 
     // Forwarding for source A (rs1)
@@ -234,7 +234,8 @@ module cpu_pipeline (
                                rs1_dataE;
 
     // Forwarding for source B (rs2) before ALUSrc mux
-    wire [31:0] rs2_fwd_base =
+    wire [31:0] rs2_fwd_base /*verilator public_flat_rd*/;
+    assign rs2_fwd_base =
         (forwardBE == 2'b10) ? alu_resultM :
         (forwardBE == 2'b01) ? resultW     :
                                rs2_dataE;
@@ -291,7 +292,7 @@ module cpu_pipeline (
     // ======================================================
 
     // pred_takenE / pred_targetE are the predictor's view of this branch
-    wire mispredictE;
+    wire mispredictE /*verilator public_flat_rd*/;
     assign mispredictE =
         BranchE && (
             (branch_taken_ex != pred_takenE) ||                     // wrong direction
@@ -334,7 +335,10 @@ module cpu_pipeline (
 
         // Data signals
         .alu_result_in    (alu_resultE),
-        .rs2_data_in      (rs2_dataE),
+        // Store data must be the FORWARDED rs2, not the raw ID/EX value —
+        // otherwise a store right after its producer writes stale data
+        // (BUGLOG B007, decision D011/F1)
+        .rs2_data_in      (rs2_fwd_base),
         .zero_in          (alu_zeroE),
         .branch_target_in (branch_targetE),
         .rd_in            (rdE),
@@ -428,9 +432,9 @@ module cpu_pipeline (
     // MEM/WB Pipeline Register
     // Carries either memory data or ALU result into WB stage
     // ======================================================
-    wire [31:0] mem_dataW;
+    wire [31:0] mem_dataW /*verilator public_flat_rd*/;
     wire [31:0] alu_resultW;
-    wire        MemToRegW;
+    wire        MemToRegW /*verilator public_flat_rd*/;
 
     mem_wb_reg MEMWB0 (
         .clk           (clk),

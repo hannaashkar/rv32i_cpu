@@ -61,6 +61,12 @@ int main(int argc, char** argv) {
         }
     }
 
+    bool verbose = false;
+    {
+        const char* arg = ctx->commandArgsPlusMatch("verbose");
+        if (arg && arg[0]) verbose = true;
+    }
+
     uint64_t t = 0;  // trace timestamp (half-cycles)
     auto half_tick = [&](uint8_t clk) {
         top->clk = clk;
@@ -83,6 +89,30 @@ int main(int argc, char** argv) {
 
         // Watch the MEM stage for the magic exit store.
         auto* r = top->rootp;
+        if (verbose && r->cpu_pipeline__DOT__BranchE)
+            printf("[sim] cycle %llu: branch pcE=0x%08x rs1=0x%08x rs2=0x%08x "
+                   "zero=%d mispredict=%d\n",
+                   (unsigned long long)cycle,
+                   r->cpu_pipeline__DOT__pcE,
+                   r->cpu_pipeline__DOT__rs1_fwdE,
+                   r->cpu_pipeline__DOT__rs2_fwd_base,
+                   (int)r->cpu_pipeline__DOT__alu_zeroE,
+                   (int)r->cpu_pipeline__DOT__mispredictE);
+        if (verbose && r->cpu_pipeline__DOT__BranchE)
+            printf("[sim]      WB: rdW=x%d RegWriteW=%d MemToRegW=%d "
+                   "mem_dataW=0x%08x resultW=0x%08x fwdA=%d\n",
+                   (int)r->cpu_pipeline__DOT__rdW,
+                   (int)r->cpu_pipeline__DOT__RegWriteW,
+                   (int)r->cpu_pipeline__DOT__MemToRegW,
+                   r->cpu_pipeline__DOT__mem_dataW,
+                   r->cpu_pipeline__DOT__resultW,
+                   (int)r->cpu_pipeline__DOT__forwardAE);
+        if (verbose && r->cpu_pipeline__DOT__MemWriteM)
+            printf("[sim] cycle %llu: store [0x%08x] <= 0x%08x (pc=0x%08x)\n",
+                   (unsigned long long)cycle,
+                   r->cpu_pipeline__DOT__alu_resultM,
+                   r->cpu_pipeline__DOT__rs2_dataM,
+                   r->cpu_pipeline__DOT__pcF);
         if (r->cpu_pipeline__DOT__MemWriteM &&
             r->cpu_pipeline__DOT__alu_resultM == MAGIC_EXIT_ADDR) {
             uint32_t code = r->cpu_pipeline__DOT__rs2_dataM;

@@ -7,7 +7,28 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 
 ---
 
-## B007 — Store data is not forwarded (stale value stored) — OPEN
+## B008 — Register file lacks write→read bypass (distance-3 RAW reads stale) — FIXED (2026-07-03)
+
+- **Symptom:** `sw/tests/store_fwd.S` kept failing *after* the B007 fix:
+  the store wrote correct data, but the later `beq` compared against 0.
+- **Root cause:** A consumer exactly **3 instructions** behind its producer
+  reads the register file in ID during the same cycle the producer writes
+  it back in WB. The write commits on the clock edge, the read is
+  combinational — so ID sees the stale value. One cycle later the producer
+  has left WB, so the EX forwarding unit (which covers distances 1–2 via
+  MEM/WB) no longer matches either. Classic missing "write-first" regfile
+  semantics. In the failing test the *load address* register was
+  distance-3, so the load read address 0 and returned 0.
+- **How caught:** `+verbose` harness tracing: forwarding fired correctly
+  (`fwdA=1, rdW=x8, MemToRegW=1`) but `mem_dataW=0` — pointing past the
+  forwarding unit to the load address, then to the ID-stage regfile read.
+- **Fix:** Internal bypass muxes on both regfile read ports
+  (`rd_data` when `reg_write && rd_addr==rs_addr && rd_addr!=0`).
+  Alternative considered: writing the regfile on the falling edge
+  (Harris & Harris style) — rejected because dual-edge clocking complicates
+  FPGA timing closure.
+
+## B007 — Store data is not forwarded (stale value stored) — FIXED (2026-07-03)
 
 - **Symptom:** `add x7,...` immediately followed by `sw x7, 0(x1)` stores
   the OLD value of x7.
@@ -18,8 +39,9 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 - **How caught:** Writing the first smoke test (2026-07-03) — had to
   deliberately distance the store-data write from the SW to make the test
   independent of this bug.
-- **Fix (planned, RV32I stage):** latch `rs2_fwd_base` instead of
-  `rs2_dataE` into EX/MEM (one-line change; needs a directed test first).
+- **Fix:** EX/MEM latches `rs2_fwd_base` instead of `rs2_dataE`
+  (decision D011/F1). Directed test `sw/tests/store_fwd.S` fails before
+  the fix (code 2, stale store) and passes after. Fixing it exposed B008.
 
 ## B006 — Memories synthesize to flip-flops instead of block RAM — OPEN
 

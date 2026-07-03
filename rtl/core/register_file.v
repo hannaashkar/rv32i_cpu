@@ -43,12 +43,23 @@ module register_file (
     end
 
     // ---------------------------------------------------------
-    // Combinational read ports
+    // Combinational read ports with internal write->read bypass
     // ---------------------------------------------------------
     // Register x0 is constant zero by RISC-V spec.
-    // Reads return immediately without waiting for a clock edge.
+    //
+    // Bypass ("write-first" behavior): a register being written back this
+    // cycle must be visible to the instruction reading in ID in the same
+    // cycle. The EX forwarding unit only covers producers still in MEM/WB;
+    // a producer exactly 3 instructions ahead is *leaving* WB while the
+    // consumer reads in ID, so without this bypass the consumer gets the
+    // stale array value (BUGLOG B008).
     // ---------------------------------------------------------
-    assign rs1_data = (rs1_addr == 5'd0) ? 32'b0 : regs[rs1_addr];
-    assign rs2_data = (rs2_addr == 5'd0) ? 32'b0 : regs[rs2_addr];
+    wire bypass_rs1 = reg_write && (rd_addr != 5'd0) && (rd_addr == rs1_addr);
+    wire bypass_rs2 = reg_write && (rd_addr != 5'd0) && (rd_addr == rs2_addr);
+
+    assign rs1_data = (rs1_addr == 5'd0) ? 32'b0 :
+                      bypass_rs1         ? rd_data : regs[rs1_addr];
+    assign rs2_data = (rs2_addr == 5'd0) ? 32'b0 :
+                      bypass_rs2         ? rd_data : regs[rs2_addr];
 
 endmodule
