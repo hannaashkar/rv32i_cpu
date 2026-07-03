@@ -263,9 +263,20 @@ module cpu_pipeline (
     // Compute branch target (PC-relative) in EX stage
     wire [31:0] branch_targetE = pcE + immE;
 
-    // Actual branch outcome in EX (currently for BEQ-style logic)
+    // Branch condition from the dedicated comparator (decision D007/B2):
+    // operates on the forwarded operands, independent of the ALU, and
+    // implements all six RV32I conditions via funct3.
+    wire branch_condE;
+
+    branch_unit BRU (
+        .a      (rs1_fwdE),
+        .b      (rs2_fwd_base),
+        .funct3 (funct3E),
+        .taken  (branch_condE)
+    );
+
     wire branch_taken_ex;
-    assign branch_taken_ex = BranchE && alu_zeroE;
+    assign branch_taken_ex = BranchE && branch_condE;
 
     // ======================================================
     // Branch Predictor (BHT + BTB)

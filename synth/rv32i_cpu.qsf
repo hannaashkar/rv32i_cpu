@@ -83,6 +83,7 @@ set_instance_assignment -name IO_STANDARD "3.3 V SCHMITT TRIGGER" -to KEY
 set_global_assignment -name VERILOG_FILE ../rtl/core/alu.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/alu_control.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/branch_predictor.v
+set_global_assignment -name VERILOG_FILE ../rtl/core/branch_unit.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/control.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/cpu_pipeline.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/ex_mem_reg.v

@@ -61,10 +61,12 @@ module control (
             end
 
             7'b1100011: begin
-                // Branch instructions (BEQ/BNE)
+                // Branch instructions (BEQ/BNE/BLT/BGE/BLTU/BGEU).
+                // The condition comes from the dedicated branch_unit
+                // (decision D007/B2); the ALU output is unused here.
                 Branch   = 1'b1;      // signal branch logic
-                ALUSrc   = 1'b0;      // compare rs1 and rs2
-                ALUOp    = 2'b01;     // ALU performs SUB for comparison
+                ALUSrc   = 1'b0;      // comparator uses rs1 and rs2
+                ALUOp    = 2'b01;     // don't-care (legacy SUB class)
             end
 
             default: begin
