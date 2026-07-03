@@ -54,8 +54,20 @@ SW_CFLAGS := -march=rv32i_zicsr -mabi=ilp32 -nostdlib -nostartfiles \
              -T sw/common/link.ld
 SW_TESTS  := $(patsubst %.S,%.hex,$(wildcard sw/tests/*.S))
 
-# Default regression program
+# --- C programs (sw/ctests): crt0 + libmin, Harvard text/data images --------
+# -lgcc supplies __mulsi3/__divsi3 etc. (rv32i has no hardware M extension)
+CRT0     := sw/common/crt0.S
+LIBMIN   := sw/common/libmin.c
+SW_CDEPS := $(CRT0) $(LIBMIN) sw/common/rv32.h sw/common/link.ld
+CFLAGS_C := $(SW_CFLAGS) -O2 -ffreestanding -Wall
+CTESTS   := $(wildcard sw/ctests/*.c)
+CTEST_HEX := $(patsubst %.c,%.text.hex,$(CTESTS)) \
+             $(patsubst %.c,%.data.hex,$(CTESTS))
+
+# Default regression program (+ optional DMEM=<data.hex> for C programs)
 PROG ?= sw/tests/smoke_arith.hex
+DMEM ?=
+DMEM_ARG = $(if $(DMEM),+dmem=$(DMEM),)
 
 .PHONY: all sim sw test run wave synth-check clean
 all: test
@@ -81,12 +93,31 @@ sw/tests/%.elf: sw/tests/%.S sw/common/link.ld
 # Keep intermediate .elf/.bin around for objdump-based debugging
 .PRECIOUS: sw/tests/%.elf %.bin
 
+# --- C program build (Harvard split) -----------------------------------------
+# One elf, two images: .text -> imem hex, initialized data -> dmem hex.
+# The .dmem_origin sentinel (crt0.S) pins the data image to 0x10000000 —
+# without it an empty .rodata would shift every address (see link.ld).
+sw/ctests/%.elf: sw/ctests/%.c $(SW_CDEPS)
+	$(RISCV_GCC) $(CFLAGS_C) -o $@ $(CRT0) $(LIBMIN) $< -lgcc
+
+%.text.hex: %.elf scripts/bin2hex.py
+	$(RISCV_OBJCOPY) -O binary --only-section=.text $< $*.text.bin
+	$(PYTHON) scripts/bin2hex.py $*.text.bin $@
+
+%.data.hex: %.elf scripts/bin2hex.py
+	$(RISCV_OBJCOPY) -O binary --only-section=.dmem_origin \
+	    --only-section=.rodata --only-section=.data --only-section=.sdata \
+	    $< $*.data.bin
+	$(PYTHON) scripts/bin2hex.py $*.data.bin $@
+
+.PRECIOUS: sw/ctests/%.elf
+
 # --- run ------------------------------------------------------------------------
 test: $(SIM_BIN) $(SW_TESTS)
 	./$(SIM_BIN) +imem=$(PROG)
 
-# Run every test program in sw/tests; fail if any fails
-regress: $(SIM_BIN) $(SW_TESTS)
+# Run every assembly test in sw/tests and every C test in sw/ctests
+regress: $(SIM_BIN) $(SW_TESTS) $(CTEST_HEX)
 	@pass=0; fail=0; \
 	for h in sw/tests/*.hex; do \
 	  if out=$$(./$(SIM_BIN) +imem=$$h); then \
@@ -95,14 +126,22 @@ regress: $(SIM_BIN) $(SW_TESTS)
 	    fail=$$((fail+1)); printf 'FAIL  %s : %s\n' "$$h" "$$out"; \
 	  fi; \
 	done; \
+	for c in sw/ctests/*.c; do \
+	  b=$${c%.c}; \
+	  if out=$$(./$(SIM_BIN) +imem=$$b.text.hex +dmem=$$b.data.hex); then \
+	    pass=$$((pass+1)); printf 'PASS  %s\n' "$$c"; \
+	  else \
+	    fail=$$((fail+1)); printf 'FAIL  %s : %s\n' "$$c" "$$out"; \
+	  fi; \
+	done; \
 	printf 'regress: %d passed, %d failed\n' $$pass $$fail; \
 	[ $$fail -eq 0 ]
 
 run: $(SIM_BIN)
-	./$(SIM_BIN) +imem=$(PROG)
+	./$(SIM_BIN) +imem=$(PROG) $(DMEM_ARG)
 
 wave: $(SIM_BIN)
-	./$(SIM_BIN) +imem=$(PROG) +trace
+	./$(SIM_BIN) +imem=$(PROG) $(DMEM_ARG) +trace
 	@echo "waveform written to sim.fst"
 
 # --- synthesis sanity check -------------------------------------------------------
@@ -112,3 +151,4 @@ synth-check:
 clean:
 	rm -rf obj_dir sim.fst
 	rm -f sw/tests/*.elf sw/tests/*.bin sw/tests/*.hex
+	rm -f sw/ctests/*.elf sw/ctests/*.bin sw/ctests/*.hex
