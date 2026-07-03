@@ -161,7 +161,20 @@ valid-bit retirement over the minimal options):
   counters. Software builds with `-march=rv32i_zicsr`.
 - `make regress`: 8/8 green; quartus_map 0 errors / 9 warnings (unchanged).
 
-**Next**: C runtime bring-up (crt0, linker layout for Harvard imem/dmem,
-+dmem data-image loading, elf→separate text/data hex) → CoreMark port →
-baseline IPC → docs/BASELINE.md → tag v1.0-inorder-baseline. Consider
-porting riscv-tests rv32ui as the acceptance gate alongside.
+**2026-07-03 (evening)** — C runtime live (branch `c-runtime`):
+- `sw/common/`: crt0.S (sp/gp/bss setup, exit protocol: main()==0 → PASS),
+  link.ld (Harvard layout: text @ 0 in imem, data @ 0x10000000 in dmem —
+  aliases to dmem word 0; `.dmem_origin` sentinel pins the extracted data
+  image even when .rodata is empty), rv32.h (MMIO + rdcycle/rdinstret
+  helpers), libmin.c (memcpy/memset/str* for freestanding gcc).
+- Makefile: `sw/ctests/*.c` → elf (crt0+libmin+`-lgcc` for __mulsi3/
+  __divsi3) → split `.text.hex` + `.data.hex`; `make regress` runs C tests
+  with `+imem=`/`+dmem=`; `make run PROG=x DMEM=y` for manual runs.
+- **First compiled C program passes**: `sw/ctests/hello.c` (recursion,
+  soft mul/div, all data sections, string ops) — 2100 cycles, 1880
+  instret, IPC 0.895. Regression now 9/9. No RTL touched in this stage.
+
+**Next**: CoreMark port (ee_printf-less validation or minimal UART-free
+reporting via MMIO) → baseline IPC → docs/BASELINE.md →
+tag v1.0-inorder-baseline. Consider porting riscv-tests rv32ui as the
+acceptance gate alongside.
