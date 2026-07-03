@@ -1,5 +1,30 @@
 # ooo_cpu — 2-wide out-of-order core specification
 
+## Measured result (2026-07-03, same binary as the baseline)
+
+| Metric | in-order (v1.0 tag) | **ooo_cpu** | delta |
+|---|---|---|---|
+| CoreMark/MHz | 1.177 | **1.397** | **+18.8%** |
+| Cycles / CoreMark iteration | 849,948 | **715,615** | 1.188× faster |
+| IPC (whole run, HW counters) | 0.849 | **1.008** | +18.7% |
+| Verification | lockstep-clean | **519,454,226 instructions, zero divergence** | same suites |
+
+Official report line (720 iterations = 10.3 simulated seconds — the OoO
+core needed MORE iterations than the baseline's 600 to satisfy the
+10-second rule, which is its own kind of result):
+
+```
+CoreMark 1.0 : 69.869960 / GCC15.2.0 -O2 -march=rv32i_zicsr / STATIC
+Correct operation validated.
+```
+
+Same flags, same libgcc soft-mul/div profile, same memories. Known IPC
+headroom deliberately left for later measured stages: speculative loads +
+LQ (the conservative-load policy costs list-benchmark IPC), a wider
+in-flight branch budget, and the B006 memory rework. Reproduce:
+`make verify-ooo && make coremark-ooo CM_ITER=720`.
+
+
 Decision D013 (see DECISIONS.md for the options considered). This file is
 the binding contract between the OoO modules — read it before touching
 any of them. The in-order core (`cpu_pipeline`) remains in the tree

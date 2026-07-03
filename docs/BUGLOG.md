@@ -7,6 +7,25 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 
 ---
 
+## B009 — OoO store queue never allocates a slot1-only store — FIXED (2026-07-03)
+
+- **Symptom:** first OoO regression: `store_fwd` load returns 0 instead
+  of the stored 42; `hello.c` diverges with a store to the WRONG address
+  (stream desync) 36 instructions in.
+- **Root cause:** in `ooo_sq.v` the slot1 allocation was nested INSIDE
+  `if (alloc0_en)` — a store dispatching in rename slot1 beneath a
+  non-store slot0 never allocated its SQ entry. Its later address/data
+  fill landed in a dead slot, the store silently vanished from memory,
+  and loads read stale data.
+- **How caught:** golden-model lockstep, first OoO bring-up run — both
+  failures pinpointed to the exact retiring instruction. Fix-to-diagnosis
+  took minutes; without lockstep this class of bug surfaces as a wrong
+  CoreMark CRC millions of cycles later.
+- **Fix:** SQ allocation interface reworked to `alloc_n` (0..2 entries at
+  tail/tail+1); store uop positions computed in the top from the tail tag
+  and slot pairing. Verified by the full lockstep suite (9 directed +
+  40 ISA + 25 random) and CoreMark.
+
 ## B008 — Register file lacks write→read bypass (distance-3 RAW reads stale) — FIXED (2026-07-03)
 
 - **Symptom:** `sw/tests/store_fwd.S` kept failing *after* the B007 fix:

@@ -100,3 +100,13 @@ set_global_assignment -name VERILOG_FILE ../rtl/mem/imem.v
 set_global_assignment -name VERILOG_FILE ../rtl/mem/dmem.v
 set_global_assignment -name VERILOG_FILE ../rtl/soc/mmio.v
 set_global_assignment -name VERILOG_FILE ../rtl/top/de10_top.v
+# 2-wide OoO core (D013). Compiled for synthesizability; the FPGA top
+# still instantiates cpu_pipeline until the timing/PLL stage (B005).
+set_global_assignment -name SEARCH_PATH ../rtl/ooo
+set_global_assignment -name SEARCH_PATH ../rtl/core
+set_global_assignment -name VERILOG_FILE ../rtl/ooo/gshare_bp.v
+set_global_assignment -name VERILOG_FILE ../rtl/ooo/ooo_decode.v
+set_global_assignment -name VERILOG_FILE ../rtl/ooo/ooo_prf.v
+set_global_assignment -name VERILOG_FILE ../rtl/ooo/ooo_iq.v
+set_global_assignment -name VERILOG_FILE ../rtl/ooo/ooo_sq.v
+set_global_assignment -name VERILOG_FILE ../rtl/ooo/ooo_cpu.v

@@ -26,10 +26,15 @@ QUARTUS_MAP   ?= /c/intelfpga_lite/20.1/quartus/bin64/quartus_map.exe
 
 # --- design ------------------------------------------------------------------
 TOP       := cpu_pipeline
-RTL_DIRS  := rtl/core rtl/mem rtl/soc
+RTL_DIRS  := rtl/core rtl/mem rtl/soc rtl/ooo
 RTL_SRCS  := $(wildcard rtl/core/*.v) $(wildcard rtl/mem/*.v) $(wildcard rtl/soc/*.v)
+OOO_SRCS  := $(wildcard rtl/ooo/*.v)
 SIM_MAIN  := tb/verilator/sim_main.cpp
 SIM_BIN   := obj_dir/V$(TOP)
+
+# 2-wide OoO core (D013): same harness, second Verilator build
+OOO_TOP     := ooo_cpu
+SIM_BIN_OOO := obj_dir_ooo/V$(OOO_TOP)
 
 # Verilator flags:
 #   --trace-fst   compile-in FST tracing (enabled at runtime with +trace)
@@ -69,6 +74,9 @@ PROG ?= sw/tests/smoke_arith.hex
 DMEM ?=
 DMEM_ARG = $(if $(DMEM),+dmem=$(DMEM),)
 
+# Which core the run/regress targets drive; the -ooo aliases override this
+RUN_BIN ?= $(SIM_BIN)
+
 .PHONY: all sim sw test run wave synth-check clean
 all: test
 
@@ -77,6 +85,13 @@ sim: $(SIM_BIN)
 
 $(SIM_BIN): $(RTL_SRCS) $(SIM_MAIN) tb/verilator/iss.h
 	$(VERILATOR) $(VFLAGS) $(RTL_SRCS) $(SIM_MAIN) -o V$(TOP)
+
+sim-ooo: $(SIM_BIN_OOO)
+
+$(SIM_BIN_OOO): $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) tb/verilator/iss.h
+	$(VERILATOR) $(VFLAGS) --top-module $(OOO_TOP) --Mdir obj_dir_ooo \
+	    -CFLAGS -DOOO_TOP \
+	    $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) -o V$(OOO_TOP)
 
 # --- software build ------------------------------------------------------------
 sw: $(SW_TESTS)
@@ -151,8 +166,8 @@ $(CM_DIR)/coremark.elf: $(CM_SRCS) $(CM_DIR)/coremark.h \
 # for the 2K performance profile (seeds 0/0/0x66) — these are independent
 # of iteration count, unlike "Correct operation validated" which also
 # requires the >=10s rule to be satisfied (CM_ITER >= 600 here).
-coremark: $(SIM_BIN) $(CM_DIR)/coremark.text.hex $(CM_DIR)/coremark.data.hex
-	./$(SIM_BIN) +imem=$(CM_DIR)/coremark.text.hex \
+coremark: $(RUN_BIN) $(CM_DIR)/coremark.text.hex $(CM_DIR)/coremark.data.hex
+	./$(RUN_BIN) +imem=$(CM_DIR)/coremark.text.hex \
 	    +dmem=$(CM_DIR)/coremark.data.hex \
 	    +max_cycles=900000000 | tee coremark.log
 	@grep -Eq 'crclist.*0xe714'  coremark.log && \
@@ -162,14 +177,14 @@ coremark: $(SIM_BIN) $(CM_DIR)/coremark.text.hex $(CM_DIR)/coremark.data.hex
 	    || { echo "coremark: CRC MISMATCH — computation is wrong"; exit 1; }
 
 # --- run ------------------------------------------------------------------------
-test: $(SIM_BIN) $(SW_TESTS)
-	./$(SIM_BIN) +imem=$(PROG)
+test: $(RUN_BIN) $(SW_TESTS)
+	./$(RUN_BIN) +imem=$(PROG)
 
 # Run every assembly test in sw/tests and every C test in sw/ctests
-regress: $(SIM_BIN) $(SW_TESTS) $(CTEST_HEX)
+regress: $(RUN_BIN) $(SW_TESTS) $(CTEST_HEX)
 	@pass=0; fail=0; \
 	for h in sw/tests/*.hex; do \
-	  if out=$$(./$(SIM_BIN) +imem=$$h); then \
+	  if out=$$(./$(RUN_BIN) +imem=$$h); then \
 	    pass=$$((pass+1)); printf 'PASS  %s\n' "$$h"; \
 	  else \
 	    fail=$$((fail+1)); printf 'FAIL  %s : %s\n' "$$h" "$$out"; \
@@ -177,7 +192,7 @@ regress: $(SIM_BIN) $(SW_TESTS) $(CTEST_HEX)
 	done; \
 	for c in sw/ctests/*.c; do \
 	  b=$${c%.c}; \
-	  if out=$$(./$(SIM_BIN) +imem=$$b.text.hex +dmem=$$b.data.hex); then \
+	  if out=$$(./$(RUN_BIN) +imem=$$b.text.hex +dmem=$$b.data.hex); then \
 	    pass=$$((pass+1)); printf 'PASS  %s\n' "$$c"; \
 	  else \
 	    fail=$$((fail+1)); printf 'FAIL  %s : %s\n' "$$c" "$$out"; \
@@ -193,11 +208,11 @@ regress: $(SIM_BIN) $(SW_TESTS) $(CTEST_HEX)
 #   python scripts/gen_random_test.py <seed> r.hex && obj_dir/Vcpu_pipeline +imem=r.hex
 RAND_SEEDS ?= 25
 RAND_LEN   ?= 3000
-regress-rand: $(SIM_BIN)
+regress-rand: $(RUN_BIN)
 	@mkdir -p build/rand; pass=0; fail=0; \
 	for s in $$(seq 1 $(RAND_SEEDS)); do \
 	  $(PYTHON) scripts/gen_random_test.py $$s build/rand/rand_$$s.hex $(RAND_LEN); \
-	  if out=$$(./$(SIM_BIN) +imem=build/rand/rand_$$s.hex); then \
+	  if out=$$(./$(RUN_BIN) +imem=build/rand/rand_$$s.hex); then \
 	    pass=$$((pass+1)); \
 	  else \
 	    fail=$$((fail+1)); printf 'FAIL  seed %s\n%s\n' "$$s" "$$out"; \
@@ -224,11 +239,11 @@ $(RVT_DIR)/rv32ui/%.elf: $(RVT_DIR)/rv32ui/%.S $(RVT_DIR)/rv64ui/%.S \
 
 .PRECIOUS: $(RVT_DIR)/rv32ui/%.elf
 
-regress-isa: $(SIM_BIN) $(RVT_HEX)
+regress-isa: $(RUN_BIN) $(RVT_HEX)
 	@pass=0; fail=0; \
 	for s in $(RVT_DIR)/rv32ui/*.S; do \
 	  b=$${s%.S}; \
-	  if out=$$(./$(SIM_BIN) +imem=$$b.text.hex +dmem=$$b.data.hex); then \
+	  if out=$$(./$(RUN_BIN) +imem=$$b.text.hex +dmem=$$b.data.hex); then \
 	    pass=$$((pass+1)); \
 	  else \
 	    fail=$$((fail+1)); printf 'FAIL  %s : %s\n' "$$b" "$$out"; \
@@ -241,11 +256,23 @@ regress-isa: $(SIM_BIN) $(RVT_HEX)
 # Umbrella: everything that must be green before merging to main
 verify: regress regress-isa regress-rand
 
-run: $(SIM_BIN)
-	./$(SIM_BIN) +imem=$(PROG) $(DMEM_ARG)
+# --- OoO core aliases: identical suites, second binary ------------------------
+regress-ooo:
+	$(MAKE) regress RUN_BIN=$(SIM_BIN_OOO)
+regress-isa-ooo:
+	$(MAKE) regress-isa RUN_BIN=$(SIM_BIN_OOO)
+regress-rand-ooo:
+	$(MAKE) regress-rand RUN_BIN=$(SIM_BIN_OOO)
+coremark-ooo:
+	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO)
+verify-ooo: regress-ooo regress-isa-ooo regress-rand-ooo
+.PHONY: sim-ooo regress-ooo regress-isa-ooo regress-rand-ooo coremark-ooo verify-ooo
 
-wave: $(SIM_BIN)
-	./$(SIM_BIN) +imem=$(PROG) $(DMEM_ARG) +trace
+run: $(RUN_BIN)
+	./$(RUN_BIN) +imem=$(PROG) $(DMEM_ARG)
+
+wave: $(RUN_BIN)
+	./$(RUN_BIN) +imem=$(PROG) $(DMEM_ARG) +trace
 	@echo "waveform written to sim.fst"
 
 # --- synthesis sanity check -------------------------------------------------------

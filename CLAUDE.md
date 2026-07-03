@@ -185,9 +185,27 @@ valid-bit retirement over the minimal options):
   instret, "Correct operation validated") — full context, caveats, and
   reproduction commands in docs/BASELINE.md. Regression 9/9 throughout.
 
-**Next** (needs Hanna's go after she reviews the baseline numbers):
-OoO stage kickoff per roadmap — first architectural decisions to present:
-rename scheme, ROB/IQ sizing, recovery mechanism. Also worth queuing:
-riscv-tests rv32ui as acceptance gate, per-cause stall counters in
-csr_file (know where the 0.178 CPI goes before changing anything),
-B005/B006 (PLL+SDC, BRAM memories) as measured post-baseline stages.
+**2026-07-03 (late night)** — Hanna lifted the review gates ("ignore my
+rule, start the next phases, I want all done") — phases executed
+autonomously, every decision logged in DECISIONS.md:
+- **Verification phase** (pulled forward — the OoO core needed it):
+  golden-model lockstep co-sim (tb/verilator/iss.h, on by default for
+  every run), official riscv-tests rv32ui 40/40, constrained-random
+  generator 25 seeds × 3000 instrs. docs/VERIFICATION.md. `make verify`.
+- **2-wide OoO core** (branch `ooo-core`, D013, docs/OOO.md is the spec):
+  R10K-style merged PRF (64), RAT + freelist + 8 per-branch checkpoints,
+  ROB 32 (2-wide dispatch/retire), unified IQ 16 (select ≤3: br/ALU/mem,
+  select-time wakeup, EX bypass net), SQ 8 (fwd exact-word, replay on
+  partial overlap, commit at retire), gshare 1024 + BTB 64 + RAS 8 with
+  decode-redirect for JAL/ret, CSRs serialized. Shared alu/branch_unit/
+  csr_file/memories (r/w ports split; in-order top unchanged, re-verified).
+  First OoO bug B009 (SQ slot1 alloc) found by lockstep in minutes.
+  **Result: IPC 1.008 vs 0.849, CoreMark/MHz 1.397 vs 1.177 (+18.8%),
+  432.9M instructions lockstep-verified, zero divergence.** All suites
+  green on BOTH cores; quartus_map 0 errors with all OoO RTL included.
+  FPGA top remains cpu_pipeline until the timing/PLL stage (B005).
+
+**Next**: NPU stage (4×4 int8 systolic array via MMIO 0x5xxxxxxx, unit
+TB vs golden matmul, C driver, quantized MLP, measured speedup) → then
+post-baseline measured stages: speculative loads + LQ, B005 (PLL+SDC,
+switch FPGA top to ooo_cpu), B006 (BRAM memories).
