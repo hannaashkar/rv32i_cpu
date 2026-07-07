@@ -239,6 +239,34 @@ docs/NPU.md is the spec)**:
   B006 (BRAM) first — speedups above are simulation-measured
   (SIM_BIG_MEM), same methodology as the CoreMark baseline.
 
-**Next**: post-baseline measured stages: speculative loads + LQ, B005
-(PLL+SDC, switch FPGA top to ooo_cpu), B006 (BRAM memories — also
-unblocks the on-board MLP demo).
+**2026-07-07** — FPGA bring-up path for the in-order core: B006 (BRAM) +
+B005 (timing) done (branch `bram-mem-sync`, decisions D016/D017; Hanna
+chose in-order-first + minimal/stall latency + PLL/SDC):
+- **B006 — synchronous-read memories (IPC-neutral fold).** dmem/imem gained
+  a `SYNC_READ` param; in-order core opts in, OoO keeps combinational reads
+  (unchanged). The one BRAM read-latency cycle is absorbed by folding the
+  existing IF/ID instruction latch and MEM/WB mem-data latch into the
+  memories' own read registers — load-use, forwarding and the 2-cycle
+  mispredict penalty are all unchanged. **dmem now infers block RAM**
+  (altsyncram; dedicated logic registers 12,499 → 5,472). imem stays logic
+  (MAX 10 won't MIF-init an auto-inferred ROM) but is M9K-ready and off the
+  async path; full imem block-RAM via `ram_init_file` deferred to the
+  on-board large-program stage. **B012** found+fixed by lockstep: sync
+  fetch dropped the stalled instruction until imem got a `hold` enable
+  mirroring the IF/ID stall.
+- **B005 — PLL + real .sdc.** `rtl/top/pll.v` (MAX 10 ALTPLL, CLOCK_50 →
+  50 MHz clean clock + locked); de10_top reset held to PLL lock, ripple
+  divider gone; first real `.sdc` (create_clock + derive_pll_clocks +
+  uncertainty + async false-paths). **STA slow-85C Fmax = 53.95 MHz, meets
+  50 MHz with +1.466 ns slack** (was −13.05 ns), 0 unconstrained paths.
+  Self-paced LED walker (`sw/demo/led_demo.S`) replaces the slow-clock demo.
+- Verified: in-order **and** OoO each 12/12 regress + 40/40 riscv-tests +
+  25/25 random seeds, lockstep clean. Quartus fitter 0 errors. `.qsf` pins
+  untouched (only pll.v + .sdc file-list entries added). **Branch not yet
+  merged to main / not pushed** — pending Hanna's review.
+
+**Next**: (1) merge `bram-mem-sync` after review; (2) port the BRAM+PLL
+scheme to `ooo_cpu` and switch the FPGA top to it; (3) imem block-RAM via
+`ram_init_file` + the on-board MLP demo; (4) speculative loads + LQ (the
+remaining OoO IPC stage). Physical board bring-up (programming the .sof,
+eyeballing the walker) is Hanna's step.
