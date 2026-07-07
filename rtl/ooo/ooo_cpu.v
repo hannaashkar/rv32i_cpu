@@ -65,7 +65,10 @@ module ooo_cpu (
     wire [31:0] pc1 = pcF + 32'd4;
     wire [31:0] instr0, instr1;
 
+    // SYNC_READ defaults to 0 → combinational fetch, unchanged for the OoO
+    // frontend (clk unused). Its memory rework is a separate later stage.
     imem IMEM0 (
+        .clk(clk), .hold(1'b0),
         .pc(pc0), .instruction(instr0),
         .pc2(pc1), .instruction2(instr1)
     );

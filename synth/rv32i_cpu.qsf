@@ -99,7 +99,10 @@ set_global_assignment -name VERILOG_FILE ../rtl/core/sign_extend.v
 set_global_assignment -name VERILOG_FILE ../rtl/mem/imem.v
 set_global_assignment -name VERILOG_FILE ../rtl/mem/dmem.v
 set_global_assignment -name VERILOG_FILE ../rtl/soc/mmio.v
+set_global_assignment -name VERILOG_FILE ../rtl/top/pll.v
 set_global_assignment -name VERILOG_FILE ../rtl/top/de10_top.v
+# Timing constraints — real .sdc for the PLL-clocked core (B005/D017)
+set_global_assignment -name SDC_FILE rv32i_cpu.sdc
 # 2-wide OoO core (D013). Compiled for synthesizability; the FPGA top
 # still instantiates cpu_pipeline until the timing/PLL stage (B005).
 set_global_assignment -name SEARCH_PATH ../rtl/ooo

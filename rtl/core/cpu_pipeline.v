@@ -13,7 +13,9 @@ module cpu_pipeline (
     // Quartus sees them as plain comments — no synthesis impact.
     wire [31:0] pcF /*verilator public_flat_rd*/;
     wire [31:0] next_pcF;
-    wire [31:0] instrF;
+    // SYNCHRONOUS fetch (B006/D016): imem's registered output — valid in the
+    // Decode cycle, paired with pcD below (no separate IF/ID instr latch).
+    wire [31:0] imem_instrD;
 
     // Branch predictor signals routed into IF stage
     wire [31:0] next_pc_predF;   // Predicted next PC
@@ -45,10 +47,14 @@ module cpu_pipeline (
         .pc     (pcF)
     );
 
-    // Instruction memory (second fetch port unused in the in-order core)
-    imem IMEM0 (
+    // Instruction memory — SYNC_READ=1 registers the fetch, folding the old
+    // IF/ID instruction latch into the M9K read register (B006/D016). The
+    // registered output is a Decode-stage signal. Second port unused here.
+    imem #(.SYNC_READ(1)) IMEM0 (
+        .clk         (clk),
+        .hold        (stallD | npu_stallE),   // freeze fetch reg with IF/ID
         .pc          (pcF),
-        .instruction (instrF),
+        .instruction (imem_instrD),
         .pc2         (32'b0),
         .instruction2()
     );
@@ -56,9 +62,9 @@ module cpu_pipeline (
     // Sequential next PC (default fall-through)
     wire [31:0] pc_plus4F = pcF + 32'd4;
 
-    // IF/ID pipeline register
+    // IF/ID control register (pc, valid, predictor). The instruction word
+    // itself now rides imem's registered output (imem_instrD) — see below.
     wire [31:0] pcD;
-    wire [31:0] instrD;
 
     // Valid bits (decision D012): mark architecturally real instructions
     // as they flow down the pipe. Flushes and bubbles carry valid=0, so
@@ -73,12 +79,10 @@ module cpu_pipeline (
         .clk           (clk),
         .reset         (reset),
         .if_pc         (pcF),
-        .if_instruction(instrF),
         .stall         (stallD | npu_stallE),
         .flush         (if_id_flush),
 
         .id_pc         (pcD),
-        .id_instruction(instrD),
         .id_valid      (validD),
 
         // Propagate predictor info into Decode
@@ -87,6 +91,12 @@ module cpu_pipeline (
         .pred_takenD(pred_takenD),
         .pred_targetD(pred_targetD)
     );
+
+    // Decode-stage instruction: imem's registered fetch, squashed to a NOP
+    // when the slot is not valid — reset startup, or a wrong-path fetch
+    // right after a mispredict. This folds in IF/ID's old flush→NOP path
+    // (B006/D016); wrong-path instructions stay architecturally inert.
+    wire [31:0] instrD = validD ? imem_instrD : 32'h00000013;
 
     // ======================================================
     // ID (Instruction Decode) Stage
@@ -561,18 +571,23 @@ module cpu_pipeline (
     wire is_ioM  = (alu_resultM[31:28] == 4'h4);
     wire is_npuM = (alu_resultM[31:28] == 4'h5);
 
-    // Separate data paths for regular RAM, MMIO and NPU reads
-    wire [31:0] ram_read_dataM;
+    // Separate data paths for regular RAM, MMIO and NPU reads. The RAM read
+    // is now SYNCHRONOUS (dmem registers it — B006/D016), so ram_read_dataW
+    // is a WB-stage signal; MMIO/NPU reads stay combinational here in MEM
+    // and are carried to WB through the MEM/WB register so all three align.
+    wire [31:0] ram_read_dataW;   // dmem registered output → valid in WB
     wire [31:0] mmio_read_dataM;
     wire [31:0] npu_read_dataM;
 
-    // Data memory: read and write ports carry the same MEM-stage access
-    dmem DMEM0 (
+    // Data memory: read and write ports carry the same MEM-stage access.
+    // SYNC_READ=1 folds the former MEM/WB mem_data latch into the M9K read
+    // register — one cycle of read latency, IPC-neutral (see WB stage).
+    dmem #(.SYNC_READ(1)) DMEM0 (
         .clk        (clk),
         .mem_read   (MemReadM  & ~is_ioM & ~is_npuM),
         .raddr      (alu_resultM),
         .rfunct3    (funct3M),              // access size + sign extension
-        .read_data  (ram_read_dataM),
+        .read_data  (ram_read_dataW),       // registered inside dmem → WB
         .mem_write  (MemWriteM & ~is_ioM & ~is_npuM),
         .waddr      (alu_resultM),
         .write_data (rs2_dataM),
@@ -616,17 +631,20 @@ module cpu_pipeline (
         .switches (switches)
     );
 
-    // Select the correct read data: MMIO vs NPU vs regular RAM
-    wire [31:0] dmem_read_dataM;
-    assign dmem_read_dataM = is_ioM  ? mmio_read_dataM
-                           : is_npuM ? npu_read_dataM
-                                     : ram_read_dataM;
+    // MMIO / NPU read data is combinational here in MEM; select which of
+    // the two. The RAM path is resolved in WB, where dmem's registered
+    // output (ram_read_dataW) arrives; mem_is_ioM records that this access
+    // targets IO/NPU rather than RAM so WB can pick the right source.
+    wire        mem_is_ioM    = is_ioM | is_npuM;
+    wire [31:0] io_read_dataM = is_npuM ? npu_read_dataM : mmio_read_dataM;
 
     // ======================================================
     // MEM/WB Pipeline Register
-    // Carries either memory data or ALU result into WB stage
+    // Carries the MMIO/NPU read data + its select bit and the ALU result
+    // into WB. The RAM read register now lives inside dmem (B006/D016).
     // ======================================================
-    wire [31:0] mem_dataW /*verilator public_flat_rd*/;
+    wire [31:0] io_read_dataW /*verilator public_flat_rd*/;  // MMIO/NPU data in WB
+    wire        mem_is_ioW;
     wire [31:0] alu_resultW;
     wire        MemToRegW /*verilator public_flat_rd*/;
     wire [31:0] pcW /*verilator public_flat_rd*/;  // lockstep: retired PC
@@ -641,7 +659,8 @@ module cpu_pipeline (
         .valid_in      (validM),
 
         // Data
-        .mem_data_in   (dmem_read_dataM),
+        .mem_data_in   (io_read_dataM),    // MMIO/NPU read data
+        .mem_is_io_in  (mem_is_ioM),       // 1 = load target is IO/NPU
         .alu_result_in (alu_resultM),
         .rd_in         (rdM),
         .pc_in         (pcM),
@@ -650,7 +669,8 @@ module cpu_pipeline (
         .RegWrite_out  (RegWriteW),
         .MemToReg_out  (MemToRegW),
         .valid_out     (validW),
-        .mem_data_out  (mem_dataW),
+        .mem_data_out  (io_read_dataW),
+        .mem_is_io_out (mem_is_ioW),
         .alu_result_out(alu_resultW),
         .rd_out        (rdW),
         .pc_out        (pcW)
@@ -659,6 +679,11 @@ module cpu_pipeline (
     // ======================================================
     // WB (Writeback) Stage
     // ======================================================
+    // Load value: registered RAM read from dmem, unless the access targeted
+    // IO/NPU, whose data rode the MEM/WB register. Both land in WB aligned.
+    wire [31:0] mem_dataW /*verilator public_flat_rd*/ =
+        mem_is_ioW ? io_read_dataW : ram_read_dataW;
+
     // Choose between memory data and ALU result as the value to write back
     assign resultW = MemToRegW ? mem_dataW : alu_resultW;
 
