@@ -541,6 +541,7 @@ module ooo_cpu (
     reg [31:0]       wb_val[0:2];
     reg [5:0]        wb_tag[0:2];
     reg              wb_ld [0:2];
+    reg              wb2_use_dmem;   // WB: slot-2 load takes the sync dmem read (D016)
 
     // Load completion is broadcast at EX-success (replay is known there),
     // not WB — load-to-use is 2 cycles. A load killed by a same-cycle
@@ -564,7 +565,7 @@ module ooo_cpu (
         .r2a(prf_r2a), .r2b(prf_r2b),
         .w0_en(wb_v[0] && wb_wr[0]), .w0_tag(wb_pd[0]), .w0_data(wb_val[0]),
         .w1_en(wb_v[1] && wb_wr[1]), .w1_tag(wb_pd[1]), .w1_data(wb_val[1]),
-        .w2_en(wb_v[2] && wb_wr[2]), .w2_tag(wb_pd[2]), .w2_data(wb_val[2])
+        .w2_en(wb_v[2] && wb_wr[2]), .w2_tag(wb_pd[2]), .w2_data(wb_result2)
     );
 
     // WB-stage bypass into EX operands
@@ -574,7 +575,7 @@ module ooo_cpu (
         begin
             if (wb_v[0] && wb_wr[0] && wb_pd[0] == ps)      bypass = wb_val[0];
             else if (wb_v[1] && wb_wr[1] && wb_pd[1] == ps) bypass = wb_val[1];
-            else if (wb_v[2] && wb_wr[2] && wb_pd[2] == ps) bypass = wb_val[2];
+            else if (wb_v[2] && wb_wr[2] && wb_pd[2] == ps) bypass = wb_result2;
             else                                            bypass = rfval;
         end
     endfunction
@@ -691,7 +692,7 @@ module ooo_cpu (
     wire mw_fire /*verilator public_flat_rd*/ = mw_valid && mw_ready;
     wire [31:0] dmem_rdata, mmio_rdata, npu_rdata;
 
-    dmem DMEM0 (
+    dmem #(.SYNC_READ(1)) DMEM0 (
         .clk(clk),
         .mem_read(p2_load && !p2_io_any),
         .raddr(p2_addr), .rfunct3(ex_u[2][`U_F3]),
@@ -751,11 +752,22 @@ module ooo_cpu (
     wire        p2_replay = p2_load && (sq_qconf
                           || (p2_io_any && sq_qolder)
                           || (p2_isnpu  && npu_busy_next));
-    wire [31:0] p2_result =
+    // Load result sources. dmem is SYNCHRONOUS now (D016): its extracted
+    // word (dmem_rdata) is a WB-stage signal — valid one cycle after
+    // p2_addr — so the RAM select is deferred to WB (wb_result2 below). The
+    // SQ-forward / MMIO / NPU sources are combinational here and are
+    // captured into wb_val[2] at EX->WB. p2_use_dmem marks a plain RAM load.
+    wire        p2_use_dmem = !sq_qhit && !p2_isio && !p2_isnpu;
+    wire [31:0] p2_nondmem  =
         sq_qhit  ? extract_load(sq_qdata, p2_addr[1:0], ex_u[2][`U_F3])
       : p2_isio  ? mmio_rdata
-      : p2_isnpu ? npu_rdata
-      :            dmem_rdata;
+      :            npu_rdata;
+
+    // WB-stage load result: a plain RAM load takes the synchronous dmem read
+    // (valid this WB cycle); otherwise the SQ/MMIO/NPU value captured in
+    // wb_val[2]. This lands the SAME cycle wb_val[2] used to, so load-to-use,
+    // wakeup and the 2-cycle load latency are all unchanged (IPC-neutral).
+    wire [31:0] wb_result2 = wb2_use_dmem ? dmem_rdata : wb_val[2];
 
 `ifdef VERILATOR
     always @(posedge clk)
@@ -820,6 +832,7 @@ module ooo_cpu (
                 wb_v[i] <= 1'b0; wb_wr[i] <= 1'b0; wb_pd[i] <= 6'b0;
                 wb_val[i] <= 32'b0; wb_tag[i] <= 6'b0; wb_ld[i] <= 1'b0;
             end
+            wb2_use_dmem <= 1'b0;
         end else begin
             // ------------------------------ dispatch (rename side effects)
             if (ok0) begin
@@ -916,7 +929,8 @@ module ooo_cpu (
             wb_v[2]   <= ex_v[2] && !kill_ex2 && !p2_replay;
             wb_wr[2]  <= ex_u[2][`U_WR];
             wb_pd[2]  <= ex_u[2][`U_PD];
-            wb_val[2] <= p2_result;
+            wb_val[2]    <= p2_nondmem;    // SQ-fwd / MMIO / NPU (D016)
+            wb2_use_dmem <= p2_use_dmem;   // RAM load -> take dmem_rdata in WB
             wb_tag[2] <= ex_u[2][`U_TAG];
             wb_ld[2]  <= ex_u[2][`U_ISLOAD];
 
@@ -931,7 +945,7 @@ module ooo_cpu (
             end
             if (wb_v[2]) begin
                 rob_done[wb_tag[2][4:0]] <= 1'b1;
-                rob_val [wb_tag[2][4:0]] <= wb_val[2];
+                rob_val [wb_tag[2][4:0]] <= wb_result2;
             end
 
             // ------------------------------ retire
