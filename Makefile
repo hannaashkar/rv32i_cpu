@@ -117,6 +117,14 @@ sw: $(SW_TESTS)
 sw/tests/%.elf: sw/tests/%.S sw/common/link.ld
 	$(RISCV_GCC) $(SW_CFLAGS) -o $@ $<
 
+# FPGA LED demo (imem synthesis default). Self-paced walker — see led_demo.S.
+sw/demo/%.elf: sw/demo/%.S sw/common/link.ld
+	$(RISCV_GCC) $(SW_CFLAGS) -o $@ $<
+
+.PHONY: demo
+demo: sw/demo/led_demo.hex
+	@echo "demo built: sw/demo/led_demo.hex (imem synthesis default)"
+
 %.bin: %.elf
 	$(RISCV_OBJCOPY) -O binary $< $@
 
