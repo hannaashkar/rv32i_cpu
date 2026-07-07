@@ -5,6 +5,31 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D017 — 2026-07-07 — PLL clock + real .sdc for honest timing closure (B005)
+
+**Context:** The CPU had been clocked by bit 25 of a free-running counter (a
+"ripple" clock, ~0.75 Hz) with no timing constraints — setup slack −13.05 ns,
+no meaningful Fmax. B005.
+
+**Decision (Hanna chose "PLL + SDC, self-paced demo"; options offered:
+SDC-only on CLOCK_50, or measure-first):**
+- A MAX 10 ALTPLL turns the 50 MHz board oscillator into a clean CPU clock
+  (`pll.v`, 1:1) with a `locked` signal; the core is held in reset until the
+  PLL locks, then the KEY[0] button is double-flopped into the CPU domain.
+  The ripple divider is gone.
+- The project's first real `.sdc`: `create_clock` on CLOCK_50 +
+  `derive_pll_clocks` + `derive_clock_uncertainty`; false-paths on the async
+  KEY/SW/LEDR pins. The PLL is instantiated directly (not a generated IP
+  blob) so the clocking is self-contained and version-controlled.
+- Because the CPU no longer runs at a human-visible rate, the LED demo paces
+  itself in software (a delay-loop walker, `sw/demo/led_demo.S`).
+
+**Result (Quartus 20.1, 10M50DAF484C7G, in-order top):** Fitter 0 errors;
+STA slow-85C **Fmax = 53.95 MHz** — meets 50 MHz with +1.466 ns setup slack,
+0 unconstrained clocks/ports. The synchronous BRAM memories (D016) removed
+the async fetch/load critical paths that made this closable. Frequency was
+confirmed by STA as agreed; 50 MHz stands with ~8% headroom.
+
 ## D016 — 2026-07-07 — Synchronous-read memories for M9K, folded into the pipeline (B006)
 
 **Context:** The in-order core's imem/dmem used combinational (async) reads,

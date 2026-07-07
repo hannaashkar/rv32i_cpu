@@ -162,7 +162,7 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
   imem/dmem gain a 1-cycle latency — needs an architectural decision).
   Deferred to the RV32I-completion / memory rework stage.
 
-## B005 — Design fails timing on the ripple-divided clock — OPEN
+## B005 — Design fails timing on the ripple-divided clock — FIXED (2026-07-07)
 
 - **Symptom:** Setup slack −13.05 ns on the `div[25]` clock domain, −2.36 ns
   on CLOCK_50 (sta.summary, 2025-12-01). Works on the board only because the
@@ -171,8 +171,14 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
   (a "ripple" clock) rather than a PLL output; no meaningful timing
   constraints (.sdc) exist.
 - **How caught:** Reading the STA summary during exploration (2026-07-02).
-- **Fix:** Use a PLL for the CPU clock + write a real .sdc. Prerequisite for
-  any honest Fmax/IPC numbers. Deferred until after the Verilator baseline.
+- **Fix (decision D017):** MAX 10 ALTPLL turns CLOCK_50 into a clean CPU
+  clock (`rtl/top/pll.v`), core held in reset until PLL lock; ripple divider
+  removed. Added the first real `.sdc` (`create_clock` + `derive_pll_clocks`
+  + `derive_clock_uncertainty`, async false-paths). LED demo now paces
+  itself in software (`sw/demo/led_demo.S`). **Result:** Quartus 20.1 STA
+  slow-85C **Fmax = 53.95 MHz**, meets 50 MHz with **+1.466 ns** setup slack,
+  0 unconstrained clocks/ports (was −13.05 ns). Made closable by the
+  synchronous BRAM memories (B006/D016) removing the async memory paths.
 
 ## B004 — ADDI with imm[11:5] = 0100000 executes as SUB — FIXED (2026-07-03)
 
