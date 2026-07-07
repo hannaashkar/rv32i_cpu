@@ -6,34 +6,46 @@ module de10_top (
 );
 
     // ======================================================
-    // Reset Synchronization
+    // Clock generation (B005, decision D017)
     // ======================================================
-    // KEY[0] is active-low on the DE10 board.
-    // Here we synchronize it to the system clock to avoid metastability.
-    reg reset_sync = 1;
+    // The CPU is clocked by a PLL-generated global clock derived from the
+    // 50 MHz board oscillator — NOT the old free-running ripple-counter bit
+    // (div[25]), which had no meaningful timing and failed STA badly. The
+    // real Fmax now comes from the .sdc constraining this clock.
+    wire cpu_clk;
+    wire pll_locked;
 
-    always @(posedge CLOCK_50) begin
-        reset_sync <= ~KEY[0];   // convert active-low pushbutton to active-high reset
+    pll PLL0 (
+        .areset (1'b0),
+        .inclk0 (CLOCK_50),
+        .c0     (cpu_clk),
+        .locked (pll_locked)
+    );
+
+    // ======================================================
+    // Reset synchronization
+    // ======================================================
+    // Hold the core in reset until the PLL locks, then release under control
+    // of the active-low KEY[0] pushbutton, double-flopped into the CPU clock
+    // domain to avoid metastability. Asynchronously asserted whenever the PLL
+    // drops lock (its output clock is then unusable).
+    reg [1:0] rst_sync;
+    always @(posedge cpu_clk or negedge pll_locked) begin
+        if (!pll_locked)
+            rst_sync <= 2'b11;                    // reset asserted while unlocked
+        else
+            rst_sync <= {rst_sync[0], ~KEY[0]};   // sync the button (active-high)
     end
 
-    wire reset = reset_sync;
-
-    // ======================================================
-    // Clock Divider
-    // ======================================================
-    // The CPU normally runs too fast to see LED updates by eye.
-    // This divider lowers the frequency so LED output becomes observable.
-    reg [31:0] div = 0;
-    always @(posedge CLOCK_50)
-        div <= div + 1;
-
-    // Slow clock for the CPU (divide by ~2^26)
-    wire cpu_clk = div[25];
+    wire reset = rst_sync[1];
 
     // ======================================================
     // CPU Instance (pipelined RV32I)
     // ======================================================
-    // The CPU writes to memory-mapped LEDs, and reads the board switches
+    // The CPU writes to memory-mapped LEDs and reads the board switches.
+    // NOTE: the CPU now runs at the full PLL frequency, so a program that
+    // wants human-visible LED activity must pace itself in software (delay
+    // loops / rdcycle) rather than relying on a slow clock (B005).
     cpu_pipeline CPU0 (
         .clk      (cpu_clk),
         .reset    (reset),
