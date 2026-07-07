@@ -265,8 +265,25 @@ chose in-order-first + minimal/stall latency + PLL/SDC):
   untouched (only pll.v + .sdc file-list entries added). **Branch not yet
   merged to main / not pushed** — pending Hanna's review.
 
-**Next**: (1) merge `bram-mem-sync` after review; (2) port the BRAM+PLL
-scheme to `ooo_cpu` and switch the FPGA top to it; (3) imem block-RAM via
-`ram_init_file` + the on-board MLP demo; (4) speculative loads + LQ (the
-remaining OoO IPC stage). Physical board bring-up (programming the .sof,
-eyeballing the walker) is Hanna's step.
+**2026-07-07 (later)** — both cores now demonstrated on the DE10-Lite:
+- **In-order core HARDWARE-CONFIRMED** at 50 MHz: `bram-mem-sync` merged to
+  main + pushed + tagged **`v3.1-inorder-fpga`**; the self-paced LED walker
+  runs live (block-RAM dmem, PLL, timing-closed). First on-silicon demo past
+  the CoreMark baseline.
+- **OoO core board port** (branch `ooo-bram-port`, D018, **NOT merged** —
+  main stays in-order): ooo_cpu got the same IPC-neutral dmem `SYNC_READ`
+  load fold (lockstep-clean 12/12+40/40+25/25); de10_top switched to
+  ooo_cpu. **OoO Fmax = 8.42 MHz — critical path entirely in the issue-queue
+  select+wakeup** (`ooo_iq` u[0]→r2, ~118 ns; the classic OoO limiter, not
+  imem/dmem). Clocked at **7.14 MHz** (PLL /7), timing MET +9.35 ns, dmem
+  block RAM (103 segments); the OoO walker runs live on the board (~1.7 s/
+  step). **Lesson: perf = IPC × Fmax** — OoO's +18.8% IPC is stranded by its
+  7× lower Fmax here (~6× slower wall-clock), until the scheduler is
+  pipelined.
+
+**Next**: (1) **pipeline the OoO issue-queue select-wakeup** — the real fix
+to raise OoO Fmax so its IPC win shows on hardware (biggest project; changes
+IPC; Hanna's micro-arch); (2) speculative loads + LQ (OoO IPC headroom; no LQ
+yet — loads are conservative); (3) imem block-RAM via `ram_init_file` + the
+on-board MLP demo. Optional: merge `ooo-bram-port` (keeps a 7 MHz OoO board
+variant). Physical board bring-up is Hanna's step (both cores flashed OK).

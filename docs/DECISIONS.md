@@ -5,6 +5,42 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D018 — 2026-07-07 — OoO core FPGA board port; clocked at 7.14 MHz (issue-queue Fmax cap)
+
+**Context:** After the in-order core reached the board (D016/D017), the goal
+was to run the 2-wide OoO core (ooo_cpu) on the DE10-Lite too. Hanna chose
+"BRAM port first, LQ later" and green-lit the implementation.
+
+**What was done (branch ooo-bram-port, NOT merged — main stays in-order):**
+- dmem `SYNC_READ=1` on ooo_cpu with an IPC-neutral load fold, same principle
+  as the in-order core: the load result lands in the SAME writeback cycle it
+  did before, so load-to-use (2 cyc), wakeup and the mispredict path are
+  unchanged. The RAM select is deferred to WB —
+  `wb_result2 = wb2_use_dmem ? dmem_rdata : wb_val[2]` — feeding the three
+  consumers (PRF write, EX bypass, ROB value). SQ-forward/MMIO/NPU are
+  captured into wb_val[2] at EX→WB; a plain RAM load takes the registered
+  dmem read in WB. No combinational loop (the registered read breaks
+  addr→data). imem left combinational: it is not on the critical path, and
+  would not infer M9K anyway (same MAX 10 initialized-ROM limit as in-order).
+- de10_top switched from cpu_pipeline to ooo_cpu (drop-in, same interface).
+
+**The finding:** STA gives **OoO Fmax = 8.42 MHz**. The critical path is
+ENTIRELY inside the issue queue (`ooo_iq:IQ0` u[0] → r2, ~118 ns): the
+un-pipelined select + wakeup + tag-broadcast across 16 entries — the classic
+OoO Fmax limiter — on MAX 10's budget fabric. imem/dmem are not on it.
+
+**Decision:** clock the OoO core at 7.14 MHz (PLL `clk0_divide_by=7`) with
+margin instead of pipelining the scheduler now. Timing MET (+9.35 ns), dmem
+block RAM (103 segments), 0 errors; the OoO walker runs on the board
+(~1.7 s/step). Options weighed: (a) run slow now [chosen — cheap, proves
+OoO-on-silicon], (b) pipeline the IQ select-wakeup [big stage, raises Fmax,
+changes IPC — deferred], (c) keep OoO sim-only.
+
+**Lesson (worth stating in an interview):** wall-clock perf = IPC × Fmax. The
+OoO core wins per-MHz (+18.8% IPC) but its 7× lower Fmax makes it ~6× slower
+on THIS board. Realizing the IPC win on hardware requires pipelining the
+issue queue — the recommended next OoO stage.
+
 ## D017 — 2026-07-07 — PLL clock + real .sdc for honest timing closure (B005)
 
 **Context:** The CPU had been clocked by bit 25 of a free-running counter (a
