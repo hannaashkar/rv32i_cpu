@@ -45,28 +45,38 @@ module imem #(
     output reg  [31:0] instruction2
 );
 
+    // NOTE (B006): with the registered read below this program store is now
+    // structurally M9K-ready, but Quartus 20.1 leaves it as logic ("MIF not
+    // supported for the selected family") when an initialized ROM is
+    // auto-inferred on MAX 10. Mapping it into M9K needs an explicit init
+    // file (ram_init_file = program.hex/.mif) — deferred to the on-board
+    // large-program stage, where a real program (not the tiny LED demo)
+    // makes the block-RAM ROM worthwhile. dmem (the ~8k-FF store) already
+    // infers block RAM. The synchronous read here is what matters for
+    // timing (B005): it breaks the async instruction-fetch critical path.
     reg [31:0] mem [0:DEPTH_WORDS-1];
 
-    integer i;
 `ifdef VERILATOR
+    integer i;
     reg [8*256:1] hexfile;           // +imem=<path> runtime override
-`endif
-
     initial begin
-        // Pad everything with NOPs so execution past the program's end
-        // is harmless instead of X-propagation.
+        // Simulation: NOP-pad the whole array (so running past the program's
+        // end is harmless, not X-propagation), then load the program.
         for (i = 0; i < DEPTH_WORDS; i = i + 1)
             mem[i] = 32'h00000013;   // addi x0, x0, 0
-
-`ifdef VERILATOR
         if ($value$plusargs("imem=%s", hexfile))
             $readmemh(hexfile, mem);
         else
             $readmemh(MEM_FILE, mem);
-`else
-        $readmemh(MEM_FILE, mem);
-`endif
     end
+`else
+    // Synthesis: initialize the program ROM straight from the hex file so
+    // Quartus can build the M9K init (MIF). A procedural NOP-fill loop mixed
+    // with $readmemh blocks MIF generation on MAX 10 (the RAM is left
+    // uninferred, B006), so the file is the sole initializer here; any
+    // unwritten words default to 0.
+    initial $readmemh(MEM_FILE, mem);
+`endif
 
     // Word-aligned access: pc[1:0] ignored, upper bits alias.
     wire [$clog2(DEPTH_WORDS)-1:0] idx  = pc [$clog2(DEPTH_WORDS)+1:2];
@@ -79,10 +89,14 @@ module imem #(
         // imem's read address (pc) has already advanced to the next fetch,
         // so freezing the PC alone is not enough — the held instruction was
         // fetched from the previous PC. hold mirrors the IF/ID stall exactly.
-        always @(posedge clk) if (!hold) begin
-            instruction  <= mem[idx];
-            instruction2 <= mem[idx2];
-        end
+        //
+        // SINGLE read port only: the in-order core (the sole SYNC_READ user)
+        // never reads instruction2, and an initialized 2-read-port RAM can't
+        // take its MIF on MAX 10 (uninferred, B006). One read port keeps the
+        // program ROM in M9K. instruction2 is tied off (unconnected upstream).
+        always @(posedge clk) if (!hold)
+            instruction <= mem[idx];
+        always @(*) instruction2 = 32'b0;
     end else begin : g_comb_fetch
         // Combinational read — original behavior, unchanged.
         always @(*) begin
