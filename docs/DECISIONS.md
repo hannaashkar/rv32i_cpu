@@ -5,6 +5,38 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D016 — 2026-07-07 — Synchronous-read memories for M9K, folded into the pipeline (B006)
+
+**Context:** The in-order core's imem/dmem used combinational (async) reads,
+which cannot map to MAX 10 M9K block RAM (they need a registered read). This
+cost ~12.5k logic registers and left 0 block-RAM bits (B006), and the long
+async memory paths are a big part of the timing failure (B005).
+
+**Decisions taken (Hanna: "pivot to B005/B006", in-order first, minimal /
+stall-based latency):**
+1. *Bring-up vehicle* — do the memory rework on the in-order core first
+   (small, isolates bugs), then port to OoO. dmem/imem gained a `SYNC_READ`
+   parameter: the in-order core sets it, the OoO core keeps combinational
+   reads (unchanged) until its own memory stage.
+2. *Latency handling* — the "extra" BRAM cycle is absorbed by **folding**,
+   not stalling. Synchronous BRAM adds one read-latency cycle, but the
+   pipeline already had a register at each memory output (the IF/ID
+   instruction latch and the MEM/WB mem-data latch). Those latches are
+   folded *into* the memories' own read registers, so the load-use timing,
+   forwarding and 2-cycle mispredict penalty are all unchanged — **IPC is
+   identical**. (Options considered: add a load-use stall cycle — simpler
+   RTL, small IPC loss; or a full MEM1/MEM2 memory pipeline — more RTL. The
+   fold gives the best of both here because the registers already existed.)
+3. *Fetch squash* — with imem's registered output serving as the Decode
+   instruction, wrong-path/startup slots are squashed to a NOP via the
+   existing pipeline `valid` bit instead of inside IF/ID; imem gets a `hold`
+   enable mirroring the IF/ID stall (B012).
+
+**Result:** dmem infers block RAM; imem stays logic on MAX 10 (initialized-
+ROM MIF limitation) but is structurally M9K-ready and no longer on the async
+critical path — full block-RAM imem via `ram_init_file` is deferred to the
+on-board large-program stage. Both cores pass full lockstep verification.
+
 ## D015 — 2026-07-03 — MNIST MLP quantization scheme (executed under the
 ## "all done" directive; decided by Claude, documented for review)
 

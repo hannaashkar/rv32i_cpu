@@ -7,6 +7,27 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 
 ---
 
+## B012 — Synchronous fetch loses the stalled instruction (fetch register not held) — FIXED (2026-07-07)
+
+- **Symptom:** After moving the in-order core to synchronous instruction
+  memory (B006), directed ALU/branch/jump tests still passed, but `hello.c`
+  and the NPU tests diverged in lockstep: the retired PC and the retired
+  instruction disagreed (e.g. `pc=0x64` writing `x10` when the instruction
+  at `0x64` writes `x31`). Failures only appeared on tight load-use pairs
+  and the NPU EX-hold — the cases that stall Decode.
+- **Root cause:** With the fetch fold, imem's registered output *is* the
+  Decode instruction, but imem's read address (`pcF`) is one instruction
+  ahead of the Decode slot. Freezing the PC on a stall is not enough: the
+  fetch register keeps latching `mem[pcF]` (the *next* instruction), so the
+  stalled instruction is overwritten by its successor while IF/ID still
+  holds the old PC → PC/instruction misalignment.
+- **How caught:** golden-model lockstep co-sim, first mismatch reported the
+  diverging PC — pinpointing a fetch/decode alignment issue, not a decode bug.
+- **Fix:** give imem's synchronous read register a `hold` enable that
+  mirrors the IF/ID stall (`stallD | npu_stallE`); when Decode is frozen the
+  fetch register freezes with it. IPC-neutral (mispredict penalty stays 2).
+  The existing `hello.c` + NPU suites already exercise it.
+
 ## B011 — In-order NPU EX-hold recomputes address/data from decaying forwarding muxes — FIXED (2026-07-03)
 
 - **Symptom:** none in the merged suites — caught pre-merge. With the
@@ -113,7 +134,21 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
   (decision D011/F1). Directed test `sw/tests/store_fwd.S` fails before
   the fix (code 2, stale store) and passes after. Fixing it exposed B008.
 
-## B006 — Memories synthesize to flip-flops instead of block RAM — OPEN
+## B006 — Memories synthesize to flip-flops instead of block RAM — PARTIALLY FIXED (2026-07-07)
+
+- **Update (2026-07-07, decision D016):** in-order core reworked to
+  synchronous-read memories. **dmem now infers block RAM** (Quartus 20.1
+  A&S: `altsyncram`, byte-lane split; dedicated logic registers 12,499 →
+  5,472). **imem is still logic**: Quartus refuses to map an auto-inferred,
+  *initialized* ROM to M9K on MAX 10 ("MIF is not supported for the selected
+  family"). imem is now structurally M9K-ready (registered read); finishing
+  it needs an explicit `ram_init_file` (.hex/.mif) and is deferred to the
+  on-board large-program stage. The synchronous fetch already removes the
+  async instruction-read critical path (the part B005 timing needs).
+  IPC-neutral on both memories; verified in-order + OoO lockstep.
+  Original report below.
+
+## B006 (original) — Memories synthesize to flip-flops instead of block RAM
 
 - **Symptom:** Fitter report (2025-12-01) shows 12,499 logic registers and
   **0 block-RAM bits**. `dmem` alone costs ~8,200 FFs; regfile, BHT and BTB
