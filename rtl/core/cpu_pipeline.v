@@ -13,7 +13,9 @@ module cpu_pipeline (
     // Quartus sees them as plain comments — no synthesis impact.
     wire [31:0] pcF /*verilator public_flat_rd*/;
     wire [31:0] next_pcF;
-    wire [31:0] instrF;
+    // SYNCHRONOUS fetch (B006/D016): imem's registered output — valid in the
+    // Decode cycle, paired with pcD below (no separate IF/ID instr latch).
+    wire [31:0] imem_instrD;
 
     // Branch predictor signals routed into IF stage
     wire [31:0] next_pc_predF;   // Predicted next PC
@@ -45,10 +47,14 @@ module cpu_pipeline (
         .pc     (pcF)
     );
 
-    // Instruction memory (second fetch port unused in the in-order core)
-    imem IMEM0 (
+    // Instruction memory — SYNC_READ=1 registers the fetch, folding the old
+    // IF/ID instruction latch into the M9K read register (B006/D016). The
+    // registered output is a Decode-stage signal. Second port unused here.
+    imem #(.SYNC_READ(1)) IMEM0 (
+        .clk         (clk),
+        .hold        (stallD | npu_stallE),   // freeze fetch reg with IF/ID
         .pc          (pcF),
-        .instruction (instrF),
+        .instruction (imem_instrD),
         .pc2         (32'b0),
         .instruction2()
     );
@@ -56,9 +62,9 @@ module cpu_pipeline (
     // Sequential next PC (default fall-through)
     wire [31:0] pc_plus4F = pcF + 32'd4;
 
-    // IF/ID pipeline register
+    // IF/ID control register (pc, valid, predictor). The instruction word
+    // itself now rides imem's registered output (imem_instrD) — see below.
     wire [31:0] pcD;
-    wire [31:0] instrD;
 
     // Valid bits (decision D012): mark architecturally real instructions
     // as they flow down the pipe. Flushes and bubbles carry valid=0, so
@@ -73,12 +79,10 @@ module cpu_pipeline (
         .clk           (clk),
         .reset         (reset),
         .if_pc         (pcF),
-        .if_instruction(instrF),
         .stall         (stallD | npu_stallE),
         .flush         (if_id_flush),
 
         .id_pc         (pcD),
-        .id_instruction(instrD),
         .id_valid      (validD),
 
         // Propagate predictor info into Decode
@@ -87,6 +91,12 @@ module cpu_pipeline (
         .pred_takenD(pred_takenD),
         .pred_targetD(pred_targetD)
     );
+
+    // Decode-stage instruction: imem's registered fetch, squashed to a NOP
+    // when the slot is not valid — reset startup, or a wrong-path fetch
+    // right after a mispredict. This folds in IF/ID's old flush→NOP path
+    // (B006/D016); wrong-path instructions stay architecturally inert.
+    wire [31:0] instrD = validD ? imem_instrD : 32'h00000013;
 
     // ======================================================
     // ID (Instruction Decode) Stage
