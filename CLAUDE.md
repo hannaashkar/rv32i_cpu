@@ -281,8 +281,14 @@ chose in-order-first + minimal/stall latency + PLL/SDC):
   7× lower Fmax here (~6× slower wall-clock), until the scheduler is
   pipelined.
 
-**2026-07-08** — branch `ooo-iq-pipeline` (pushed, NOT merged; Hanna
-overrode the hands-only rule for this work):
+**2026-07-08** — branch `ooo-iq-pipeline` → **MERGED to `main` + pushed**
+(merge commit `dbc0ecc`, `--no-ff`; Hanna overrode the hands-only rule and
+approved the merge). **The merge FLIPPED the FPGA board top: `de10_top` now
+instantiates `ooo_cpu` @ 16.67 MHz (PLL /3), NOT the in-order core @ 50 MHz
+(tag `v3.1-inorder-fpga`).** Hanna chose this knowing OoO is ~6× slower
+wall-clock on the board (perf = IPC × Fmax). Both cores remain fully verified on
+merged main (in-order 14/14+40/40+25/25; OoO 14/14+40/40+25/25+25/25 `--vio`;
+`quartus_map` 0 errors). Contents:
 - **Task 1 DONE (D019): OoO issue-queue select pipelined.** `ooo_iq.pick()`
   rewritten from a 16-deep serial min-chain to a balanced log-depth tree
   (bit-identical grant via lower-index tie-break) + parallel port-1 select.
@@ -320,11 +326,16 @@ overrode the hands-only rule for this work):
 - **Build gotcha:** Verilator builds SILENTLY FAIL without
   `VERILATOR_ROOT=…/ucrt64/share/verilator` exported.
 
-**Next**: (1) **Merge decision (Hanna):** `ooo-iq-pipeline` now carries two
-independent, fully-verified pieces — Task 1 (D019 IQ pipelining, Fmax 2.33×) and
-Task 2 (D020 spec loads, +2.0% CoreMark IPC). Both are OoO-only; `main` stays
-in-order. Options: merge the branch as-is, or split Task 1 to its own branch and
-merge separately. (2) **imem block-RAM via `ram_init_file`** (even/odd
-single-port banks) + on-board MLP demo (Task 3, low risk). (3) The deeper
-2-stage pipelined scheduler (to actually beat in-order on HW; needs ~42 MHz)
-remains a separate future project.
+**Next** (Hanna deferred to a new session): (1) **Store-set / dependence
+predictor** — the clean fix for the hello.c −36% regression: stop re-speculating
+a load once it has violated, so violation-dense code (stack spills) falls back to
+conservative after the first miss while CoreMark keeps its +2.0%. New RTL —
+needs Hanna's go. (2) **imem block-RAM via `ram_init_file`** (even/odd
+single-port banks) + on-board MLP demo (Task 3, low risk). (3) **On-board
+bring-up of the merged OoO top** — flash the `.sof`, confirm the LED walker runs
+at 16.67 MHz (the board top is now OoO). (4) The deeper 2-stage pipelined
+scheduler (to actually beat in-order on HW; needs ~42 MHz) remains a separate
+future project. **Env note:** riscv-gcc under MSYS make needs TMP/TEMP/TMPDIR
+passed as **make variables** in **backslash** Windows form (else
+`Cannot create temporary file in C:\WINDOWS\`); exported shell vars don't reach
+the recipe.
