@@ -64,9 +64,15 @@ module ooo_iq #(
     input  wire              ldone_en,
     input  wire [5:0]        ldone_tag,
 
-    // squash: kill entries strictly younger than flush_tag
+    // squash: kill entries strictly younger than flush_tag (branch mispredict)
     input  wire              flush_en,
     input  wire [5:0]        flush_tag,
+    // full flush (load-ordering-violation flush-at-head, D020): clear EVERY
+    // resident entry. A tag-relative "younger than head-1" trick cannot express
+    // "all" in modular ROB-tag arithmetic (relage is 6-bit, so > 63 is never
+    // true), so the violation flush needs its own unconditional clear — same
+    // pattern the SQ (commit_tail4) and LQ (flush_all) already use.
+    input  wire              flush_all,
 
     // selects
     output reg               sel0_v,
@@ -317,8 +323,12 @@ module ooo_iq #(
                 mask[free1]   <= disp1_mask;
             end
 
-            // squash LAST: overrides dispatch/wakeup of dying entries
-            if (flush_en) begin
+            // squash LAST: overrides dispatch/wakeup of dying entries.
+            // flush_all (violation flush-at-head) empties the whole IQ; it
+            // takes priority over the tag-relative branch squash.
+            if (flush_all) begin
+                for (i = 0; i < IQD; i = i + 1) v[i] <= 1'b0;
+            end else if (flush_en) begin
                 for (i = 0; i < IQD; i = i + 1)
                     if (v[i] && ((u[i][`U_TAG] - head_tag)
                                  > (flush_tag - head_tag)))

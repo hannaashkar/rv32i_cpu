@@ -1,10 +1,17 @@
 # Speculative Loads + Load Queue (LQ) — design spec
 
-Status: **design confirmed, implementation staged** (2026-07-08).
+Status: **IMPLEMENTED + verified + measured** (2026-07-08). See DECISIONS.md
+**D020** for the results and BUGLOG **B013** for the one bug found (IQ not
+cleared on the violation flush). Correctness: OoO 14/14 + 40/40 riscv-tests
+(incl. `ld_st`) + 25/25 random + 25/25 `--vio` stress (1185 violations), all
+lockstep-clean. IPC: **violation-frequency-dependent** — CoreMark (rare)
+**1.026** spec vs **1.006** cons (+2.0%), but hello.c (15 stack-spill
+violations) is −36% because the flush-at-head recovery is a ~46-cyc drain (open
+Hanna call — see D020: keep on / default off / add a store-set predictor). Fmax:
+**26.32 MHz** slow-85C (LQ CAM did not erode the D019 wall).
 Owner decisions (Hanna): LQ depth = **8**; recovery = **poison + flush at ROB
 head** (Strategy B). Derived from a 3-way adversarial design analysis
-(structure / recovery / ISS-lockstep). See DECISIONS.md D020 (added at
-implementation).
+(structure / recovery / ISS-lockstep).
 
 ## Why
 

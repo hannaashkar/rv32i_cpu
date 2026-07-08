@@ -40,6 +40,7 @@ sw/npu_mlp/data/
 # Session bookkeeping (not project content)
 .remember/
 obj_dir_ooo/
+obj_dir_ooo_cons/
 obj_dir_npu/
 obj_dir_probe/
 synth/simulation/

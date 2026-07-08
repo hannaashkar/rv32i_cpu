@@ -948,11 +948,14 @@ module ooo_cpu (
         .rep_en(p2_replay), .rep_tag(ex_u[2][`U_TAG]),
         .ldone_en(ex_v[2] && ex_u[2][`U_ISLOAD] && !p2_replay),
         .ldone_tag(ex_u[2][`U_TAG]),
-        // branch mispredict flushes younger-than-branch; a load-violation
-        // flush-at-head empties the whole IQ (anchor = head_tag-1, so every
-        // resident entry, all >= head, is "younger" and cleared).
-        .flush_en(restore_en || lq_flush_start),
-        .flush_tag(lq_flush_start ? (head_tag - 6'd1) : restore_tag),
+        // branch mispredict flushes entries younger-than-branch (tag-relative);
+        // a load-violation flush-at-head empties the WHOLE IQ via flush_all.
+        // (The prior head_tag-1 "everything is younger" trick never matched —
+        // relage is 6-bit so > 63 is always false — leaving stale IQ entries
+        // that re-issued post-flush with reallocated phys regs. B013.)
+        .flush_en(restore_en),
+        .flush_tag(restore_tag),
+        .flush_all(lq_flush_start),
         .sel0_v(sel0_v), .sel0_uop(sel0_uop),
         .sel1_v(sel1_v), .sel1_uop(sel1_uop),
         .sel2_v(sel2_v), .sel2_uop(sel2_uop)

@@ -293,24 +293,38 @@ overrode the hands-only rule for this work):
   pipelined scheduler is the deferred next step (Hanna chose "bank 19.65").
   Design adversarially verified before coding (naive "register the grant"
   split rejected: it costs 1 bubble/pair).
-- **Task 2 (D020) ~95% — speculative loads + LQ, WIP, 1 bug left.** Full impl:
-  `ooo_lq.v` (8-entry LQ + store→younger-load violation CAM), `SPEC_LOADS`
-  param relaxes the conservative load gate, aRAT + `rob_poison` + multi-cycle
-  flush-at-head "Strategy B-real" recovery (a violated load owns no checkpoint
-  → `rat<=arat` + per-cycle freelist rebuild). **Happy path GREEN** (14/14
-  regress + 25/25 random lockstep; directed `sw/tests/lq_violation.S` PASSES
-  with recovery active). **OPEN: riscv-test `ld_st` fails** — a younger
-  wrong-path branch dependent on the spec load mis-redirects before the
-  violation flush completes; root cause + fix candidates in
-  **`docs/LQ_WIP_HANDOFF.md`** (read first). `SPEC_LOADS=0` → whole suite
-  green. 4 recovery bugs already fixed.
+- **Task 2 DONE (D020): speculative loads + load queue.** `ooo_lq.v` (8-entry
+  LQ + store→younger-load violation CAM), `SPEC_LOADS=1` relaxes the
+  conservative load gate for RAM loads (IO/NPU keep strong ordering), aRAT +
+  `rob_poison` + multi-cycle flush-at-head "Strategy B-real" recovery (a
+  violated load owns no checkpoint → `rat<=arat` + per-cycle freelist rebuild).
+  **The `ld_st` failure was B013, NOT the WIP handoff's hypothesis:** the
+  violation flush never cleared the IQ — it reused the branch path with
+  `flush_tag=head_tag−1`, but the 6-bit relage predicate makes `>63` always
+  false → ZERO entries cleared → stale pre-flush IQ entries re-issued with
+  reallocated phys regs. Fix = a real `flush_all` port on `ooo_iq`
+  (`lq_flush_start`). **Verified:** OoO 14/14 regress + 40/40 riscv-tests
+  (incl. `ld_st`, ~49 violation+recovery events) + 25/25 random + a new 25/25
+  `--vio` stress suite (1185 real violations), all lockstep-clean; in-order
+  untouched (14/14+40/40+25/25). **IPC is governed by violation frequency
+  because the flush-at-head recovery is a heavy ~46-cyc drain: CoreMark
+  (violations rare) IPC 1.026 spec vs 1.006 cons = +2.0%; hello.c (15 stack-
+  spill violations / 1882 instr) 2613 cyc spec vs 1921 cons = −36%.** Both
+  CRC/lockstep-clean. NET win needs violation-sparse code — **open Hanna call:
+  keep SPEC_LOADS=1, default off, or add a store-set predictor to stop
+  re-speculating a load that violated** (see D020). **Fmax 26.32 MHz** slow-85C (bare `ooo_cpu`
+  top, 48,238 LEs/97%, 16 DSP) — the LQ CAM did NOT erode the D019 wall
+  (crit path = load-uop→CAM→`rob_poison`, still clocks above the wakeup
+  limiter). `ooo_lq.v` added to `synth/rv32i_cpu.qsf`; `make regress-rand-vio`
+  + `verify-ooo` updated. `docs/LQ_WIP_HANDOFF.md` marked DONE.
 - **Build gotcha:** Verilator builds SILENTLY FAIL without
   `VERILATOR_ROOT=…/ucrt64/share/verilator` exported.
 
-**Next**: (1) **finish the LQ** — fix the `ld_st` wrong-path-branch bug
-(docs/LQ_WIP_HANDOFF.md), re-verify full suite + measure IPC on CoreMark +
-STA (confirm the LQ CAM didn't erode the D019 Fmax), log D020. (2) **imem
-block-RAM via `ram_init_file`** (even/odd single-port banks) + on-board MLP
-demo (Task 3, low risk). (3) Optionally split Task 1 to its own branch and
-merge (it's independent + fully verified). The deeper 2-stage pipelined
-scheduler (to actually beat in-order on HW) remains a separate future project.
+**Next**: (1) **Merge decision (Hanna):** `ooo-iq-pipeline` now carries two
+independent, fully-verified pieces — Task 1 (D019 IQ pipelining, Fmax 2.33×) and
+Task 2 (D020 spec loads, +2.0% CoreMark IPC). Both are OoO-only; `main` stays
+in-order. Options: merge the branch as-is, or split Task 1 to its own branch and
+merge separately. (2) **imem block-RAM via `ram_init_file`** (even/odd
+single-port banks) + on-board MLP demo (Task 3, low risk). (3) The deeper
+2-stage pipelined scheduler (to actually beat in-order on HW; needs ~42 MHz)
+remains a separate future project.

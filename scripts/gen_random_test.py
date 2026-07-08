@@ -16,7 +16,13 @@ the AUIPC+JALR pair, LUI/AUIPC, and Zicsr ops (mscratch + counter reads).
 x0 appears as rd occasionally on purpose. Registers x28-x31 are reserved
 for the exit sequence.
 
-Usage: gen_random_test.py SEED OUT.hex [LENGTH]
+Usage: gen_random_test.py SEED OUT.hex [LENGTH] [--vio]
+
+--vio  (D020 LQ stress) periodically inject a "late-store / early-load to the
+       SAME address" pattern so the load-ordering violation CAM + poison +
+       flush-at-head recovery actually fires under random interleaving. Off by
+       default so the proven golden seeds are byte-identical; on it uses
+       reserved scratch regs x24-x27 and is self-terminating + lockstep-safe.
 """
 import random
 import sys
@@ -54,12 +60,33 @@ NOP = 0x00000013
 DATA_REGS = list(range(1, 16))          # rd/rs pool (x1..x15)
 BASE_REGS = [20, 21, 22, 23]            # stable memory base registers
 
-def gen(seed, length):
+VIO_REGS = [24, 25, 26, 27]             # scratch regs for the --vio pattern
+
+def gen(seed, length, vio=False):
     rng = random.Random(seed)
     words = []
 
     def emit(w):
         words.append(w & 0xFFFFFFFF)
+
+    # --- late-store / early-load to the SAME address (D020 LQ stress) -----
+    # An OLDER store whose ADDRESS depends on a long serial chain (resolves
+    # late) to the same word a YOUNGER load reads immediately: with speculative
+    # loads the load issues first, reads stale, then the store fills -> the LQ
+    # violation CAM fires -> poison + flush-at-head recovery. Value-agnostic:
+    # lockstep vs the in-order ISS is the check (the ISS never speculates, so
+    # any mis-recovery diverges at retire). Uses VIO_REGS only.
+    def emit_vio(base_reg):
+        b, c, s, l = VIO_REGS                     # b=addr, c=chain, s=data, l=loaded
+        emit(i_type(0, base_reg, 0, b, 0x13))     # addi b, base, 0  (b = base addr)
+        emit(i_type(0, 0, 0, c, 0x13))            # addi c, x0, 0     (chain = 0)
+        for _ in range(rng.randrange(30, 90)):    # long serial dep chain
+            emit(i_type(1, c, 0, c, 0x13))        # addi c, c, 1
+        emit(r_type(0x20, c, c, 0, c, 0x33))      # sub  c, c, c   -> 0, but LATE
+        emit(r_type(0, c, b, 0, b, 0x33))         # add  b, b, c   -> b, resolves LATE
+        emit(i_type(rng.getrandbits(8), 0, 0, s, 0x13))   # addi s, x0, imm (store data)
+        emit(s_type(0, s, b, 2))                  # sw   s, 0(b)   OLDER store (late addr)
+        emit(i_type(0, base_reg, 2, l, 0x03))     # lw   l, 0(base) YOUNGER load (early)
 
     # --- init: seed the register pool with varied constants -----------
     for r in DATA_REGS:
@@ -78,6 +105,12 @@ def gen(seed, length):
 
     body = 0
     while body < length:
+        # --vio: inject a violation-forcing pattern roughly every ~40 body
+        # instrs. Additive only (default path unchanged when vio is False).
+        if vio and rng.random() < 0.025:
+            emit_vio(rng.choice(BASE_REGS))
+            body += 12
+            continue
         k = rng.random()
         if k < 0.35:                                   # R-type ALU
             f3 = rng.randrange(8)
@@ -146,10 +179,12 @@ def gen(seed, length):
 def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
-    seed = int(sys.argv[1])
-    out = sys.argv[2]
-    length = int(sys.argv[3]) if len(sys.argv) > 3 else 3000
-    words = gen(seed, length)
+    argv = [a for a in sys.argv[1:] if a != "--vio"]
+    vio = "--vio" in sys.argv
+    seed = int(argv[0])
+    out = argv[1]
+    length = int(argv[2]) if len(argv) > 2 else 3000
+    words = gen(seed, length, vio=vio)
     with open(out, "w") as f:
         f.write("// constrained-random test, seed %d, %d words\n"
                 % (seed, len(words)))

@@ -1,6 +1,28 @@
-# LQ (speculative loads) — WORK-IN-PROGRESS handoff
+# LQ (speculative loads) — handoff (NOW COMPLETE)
 
-**Status: ~95% done, ONE bug left. Branch `ooo-iq-pipeline` (NOT merged).**
+**Status: ✅ DONE (2026-07-08).** The `ld_st` bug was root-caused and fixed;
+full suite is green and speculation is measured. See **DECISIONS.md D020** and
+**BUGLOG B013** for the authoritative record — the rest of this file is kept as
+the historical debugging trail.
+
+> **Resolution (superseding the "one bug left" analysis below):** the remaining
+> failure was NOT the pre-flush wrong-path-branch race hypothesized here. The
+> real cause (**B013**) was that the load-violation flush-at-head never cleared
+> the issue queue: it reused the branch path with `flush_tag = head_tag − 1`,
+> but the 6-bit relage predicate makes `relage > 63` always false, so ZERO IQ
+> entries were cleared. Surviving pre-flush IQ entries re-issued post-flush with
+> reallocated phys regs. Fix: a dedicated `flush_all` port on `ooo_iq` driven by
+> `lq_flush_start`. Fixes A/B/C proposed below were all aimed at the wrong
+> mechanism and were not needed.
+>
+> **Verified:** OoO 14/14 + 40/40 riscv-tests + 25/25 random + 25/25 `--vio`
+> (1185 violations), all lockstep-clean; CoreMark IPC 1.026 vs 1.006
+> conservative (+2.0%); Fmax 26.32 MHz slow-85C (LQ CAM not the wall). `--vio`
+> mode + `make regress-rand-vio` added to close the LQ.md Inc-0 coverage gap.
+
+---
+
+**(historical) Status: ~95% done, ONE bug left. Branch `ooo-iq-pipeline`.**
 Date paused: 2026-07-08.
 
 ## TL;DR for the next session
