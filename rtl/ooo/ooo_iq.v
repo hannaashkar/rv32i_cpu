@@ -171,15 +171,31 @@ module ooo_iq (
     wire       gr0_v    = p_br[4] | p_alu0nc[4];
     wire [3:0] gr0_i    = p_br[4] ? p_br[3:0] : p_alu0nc[3:0];
 
-    // port1: oldest ALU/CSR excluding port0's grant
-    wire [IQD-1:0] elig_alu_m1;
-    generate
-        for (g = 0; g < IQD; g = g + 1) begin : M1
-            assign elig_alu_m1[g] = elig_alu[g]
-                                    && !(gr0_v && (gr0_i == g[3:0]));
-        end
-    endgenerate
-    wire [4:0] p_alu1 = pick(elig_alu_m1);
+    // port1: oldest ALU/CSR excluding port0's grant.
+    //
+    // TIMING (D019, increment 1b): the previous version masked out gr0_i and
+    // re-scanned (elig_alu_m1), so port1's pick could not start until port0's
+    // grant (gr0_i) had resolved — two age-scans in series, a second long
+    // pole after 1a. Instead compute the oldest AND second-oldest ALU op IN
+    // PARALLEL (the 2nd is a find-first over the same vector with the 1st
+    // winner's one-hot cleared — one extra shallow tree, not a dependent
+    // re-scan), then resolve port1 with a terminal mux.
+    //
+    // Set semantics preserved EXACTLY: port1 = oldest ALU/CSR excluding
+    // port0's actual grant. Port0 only ever removes an ALU entry from the
+    // set when it took that exact ALU op — so substitute the 2nd-oldest ONLY
+    // when gr0 took the 1st-oldest ALU index. When port0 took a BRANCH,
+    // gr0_i is not an elig_alu member at all, so the exclusion was a no-op in
+    // the old code too, and port1 correctly gets the oldest ALU (p_alu_1st).
+    // Verified equivalent by lockstep (not by inspection).
+    wire [4:0] p_alu_1st = pick(elig_alu);
+    wire [IQD-1:0] onehot_1st = (p_alu_1st[4])
+                               ? (16'b1 << p_alu_1st[3:0]) : 16'b0;
+    wire [IQD-1:0] elig_alu_no1 = elig_alu & ~onehot_1st;
+    wire [4:0] p_alu_2nd = pick(elig_alu_no1);
+
+    wire port0_took_alu1st = gr0_v && p_alu_1st[4] && (gr0_i == p_alu_1st[3:0]);
+    wire [4:0] p_alu1 = port0_took_alu1st ? p_alu_2nd : p_alu_1st;
 
     // port2: oldest memory op
     wire [4:0] p_mem = pick(elig_mem);
