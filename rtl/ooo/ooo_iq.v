@@ -100,22 +100,60 @@ module ooo_iq (
         end
     endgenerate
 
-    // oldest-first pick over an eligibility vector (serial min chain —
-    // fine at 16 entries; timing work is a later, measured stage)
+    // oldest-first pick over an eligibility vector.
+    //
+    // TIMING (D019, increment 1a): the previous version was a 16-deep serial
+    // min-chain — each iteration's winner fed the next, so synthesis built a
+    // ~16-level ripple that dominated the OoO critical path (the 8.42 MHz
+    // Fmax cap, D018). This is a *balanced log-depth reduction tree* that
+    // returns the BIT-IDENTICAL result in ~4 combine levels instead of 16.
+    //
+    // Each leaf is a candidate packed as {found, age[5:0], idx[3:0]} (11b).
+    // `cmb2` combines two candidates keeping the OLDER (smaller relage), and
+    // on an age TIE keeps the LEFT (lower-index) operand — which reproduces
+    // the serial loop's strict `<` tie-break (first/lowest index at the min
+    // age wins) exactly, so the grant index is unchanged and the schedule is
+    // cycle-for-cycle identical (IPC-neutral). Verified by lockstep.
+    localparam CANDW = 11;                 // {found(1), age(6), idx(4)}
+
+    function [CANDW-1:0] cmb2;             // combine two candidates
+        input [CANDW-1:0] a;               // left  (lower index range)
+        input [CANDW-1:0] b;               // right (higher index range)
+        reg a_f, b_f;
+        reg [5:0] a_age, b_age;
+        begin
+            a_f = a[10]; b_f = b[10];
+            a_age = a[9:4]; b_age = b[9:4];
+            // keep b only if a is empty, or b is strictly older than a.
+            // (strict `>` for a's age => on a tie, keep a = the left/lower
+            //  index => matches the serial loop's `relage[k] < best`.)
+            if (!a_f)                       cmb2 = b;
+            else if (b_f && (a_age > b_age)) cmb2 = b;
+            else                            cmb2 = a;
+        end
+    endfunction
+
     function [4:0] pick;  // returns {found, idx[3:0]}
         input [IQD-1:0] e;
-        reg  [5:0] best;
-        reg  [3:0] bi;
-        reg        f;
-        integer    k;
+        // leaf candidates
+        reg [CANDW-1:0] c  [0:15];
+        // tree levels (16 -> 8 -> 4 -> 2 -> 1)
+        reg [CANDW-1:0] l8 [0:7];
+        reg [CANDW-1:0] l4 [0:3];
+        reg [CANDW-1:0] l2 [0:1];
+        reg [CANDW-1:0] top;
+        integer j;
         begin
-            best = 6'd63; bi = 4'd0; f = 1'b0;
-            for (k = 0; k < IQD; k = k + 1) begin
-                if (e[k] && (!f || (relage[k] < best))) begin
-                    f = 1'b1; best = relage[k]; bi = k[3:0];
-                end
-            end
-            pick = {f, bi};
+            for (j = 0; j < 16; j = j + 1)
+                c[j] = {e[j], relage[j], j[3:0]};   // found=e[j]; age; index
+            for (j = 0; j < 8; j = j + 1)
+                l8[j] = cmb2(c[2*j], c[2*j+1]);
+            for (j = 0; j < 4; j = j + 1)
+                l4[j] = cmb2(l8[2*j], l8[2*j+1]);
+            for (j = 0; j < 2; j = j + 1)
+                l2[j] = cmb2(l4[2*j], l4[2*j+1]);
+            top = cmb2(l2[0], l2[1]);
+            pick = {top[10], top[3:0]};              // {found, idx}
         end
     endfunction
 
