@@ -5,6 +5,55 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D019 — 2026-07-08 — OoO issue-queue select rewritten as a log-depth tree; Fmax 8.42 → 19.65 MHz (IPC-neutral)
+
+**Context:** D018 found the OoO Fmax capped at 8.42 MHz by the issue-queue
+select+wakeup path (~118 ns). The un-pipelined scheduler is the classic OoO
+limiter. Hanna chose to attack it. An adversarial 3-way design analysis
+(cycle-accuracy, correctness, FPGA-timing) established that the *dominant*
+cost was NOT the wakeup but the O(16) **serial oldest-first age-scan** in
+`pick()` (~75% of the path) and its port0→port1 chaining, and that the
+obvious "register the grant" 2-stage split would silently cost 1 bubble per
+dependent pair (IPC loss). The IPC-neutral path is to shorten the scan while
+keeping the tag broadcast same-cycle.
+
+**What was done (branch ooo-iq-pipeline, decision D019, two verified increments):**
+- **1a — balanced-tree `pick()`.** Replaced the 16-deep serial min-chain with
+  a log-depth reduction tree (16→8→4→2→1, ~4 combine levels). `cmb2` keeps
+  the older candidate and, on an age tie, the lower-index (left) operand —
+  bit-identical to the serial loop's strict `<` tie-break, so the grant index
+  is unchanged.
+- **1b — parallel port-1 select.** port1's pick no longer re-scans
+  `elig_alu` minus port0's grant (which serialized it behind port0). Instead
+  the oldest AND second-oldest ALU are found in parallel (2nd = find-first
+  with the 1st winner's one-hot cleared) and port1 is a terminal mux:
+  substitute the 2nd only when port0 actually took the 1st ALU entry.
+  Preserves the exact "exclude port0's actual grant; branch-on-port0 is a
+  no-op exclusion; CSR-oldest lands on port1" semantics.
+
+**Result (Quartus 20.1, 10M50DAF484C7G, OoO top):** STA slow-85C **Fmax
+19.65 MHz** (was 8.42) — a **2.33× clock improvement** — fitter 0 errors,
+44,422 LEs (89%, no bloat vs baseline). **IPC bit-identical (1.008):**
+`hello.c` cycles/instret unchanged (1914/1882); OoO 12/12 regress + 40/40
+riscv-tests + 25/25 random seeds all lockstep-clean, zero divergence. The new
+STA critical path is the load-result → `wakes()` → `r2` ready-bit wakeup
+(~50.9 ns) — i.e. the scan is gone and the residual limiter is the wakeup
+broadcast, exactly as predicted. PLL retargeted 50 MHz /7 → **/3 = 16.67 MHz**
+(≈15% margin under 19.65). Options weighed: (a) bank 19.65 + move on [CHOSEN
+— clean, honest, IPC-neutral, defensible]; (b) push the true 2-stage
+pipelined scheduler now [~40–50 MHz but IPC-risked, large — SCOPED AS FUTURE
+WORK]; (c) increment 1c `mask_zero` flop for ~22–25 MHz [deferred — still
+short of break-even].
+
+**Lesson (interview-grade):** perf = IPC × Fmax, and the OoO core needs
+Fmax ≥ ~42 MHz just to TIE the in-order core's 50 MHz wall-clock (its IPC
+edge is only +18.8%). The tree/parallel-pick rewrite is a real, measured,
+zero-IPC-cost 2.33× — but realizing the OoO's IPC win on THIS board requires
+the deeper pipelined scheduler (which does risk IPC and is a separate,
+IPC-measured, Hanna-signed-off increment). Attacking the *scan* first was
+correct: it is where the timing was, it was provably IPC-neutral, and its STA
+result is what tells us the wakeup broadcast is the next wall.
+
 ## D018 — 2026-07-07 — OoO core FPGA board port; clocked at 7.14 MHz (issue-queue Fmax cap)
 
 **Context:** After the in-order core reached the board (D016/D017), the goal

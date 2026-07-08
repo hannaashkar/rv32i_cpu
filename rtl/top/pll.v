@@ -7,13 +7,15 @@
 //             stable. This is the prerequisite for any honest Fmax number.
 // Interfaces: inclk0 = 50 MHz board clock (CLOCK_50); c0 = CPU clock;
 //             locked = PLL lock status; areset = active-high async reset.
-// Ratio:      50 MHz -> 7.14 MHz (divide by 7) for the OUT-OF-ORDER top.
-//             The OoO core's issue-queue select+wakeup path is a single
-//             ~118 ns combinational cloud (STA: Fmax 8.42 MHz), so the core
-//             is clocked well under that with margin rather than pipelining
-//             the scheduler (a separate stage). The in-order top uses 50 MHz
-//             (1:1); only clk0_divide_by changes between the two — the rest
-//             of the SoC and the .sdc (derive_pll_clocks) are untouched.
+// Ratio:      50 MHz -> 16.67 MHz (divide by 3) for the OUT-OF-ORDER top.
+//             The OoO issue-queue select was an O(16) serial age-scan (STA:
+//             Fmax 8.42 MHz, D018). D019 rewrote it as a balanced log-depth
+//             pick tree with parallel dual-port select — IPC-identical, no
+//             scheduler pipelining — lifting STA Fmax to 19.65 MHz (slow-85C).
+//             The core is clocked at 16.67 MHz, ~15% under that Fmax. The
+//             in-order top uses 50 MHz (1:1); only clk0_divide_by changes
+//             between the two — the rest of the SoC and the .sdc
+//             (derive_pll_clocks) are untouched.
 // Notes:      Instantiated directly (not via a generated IP wrapper) so the
 //             clocking is self-contained and version-controlled. Quartus
 //             recognizes the altpll megafunction natively for MAX 10.
@@ -71,7 +73,7 @@ module pll (
 
     defparam
         altpll_component.bandwidth_type         = "AUTO",
-        altpll_component.clk0_divide_by         = 7,   // 50 MHz / 7 = 7.14 MHz
+        altpll_component.clk0_divide_by         = 3,   // 50 MHz / 3 = 16.67 MHz
         altpll_component.clk0_duty_cycle        = 50,
         altpll_component.clk0_multiply_by       = 1,
         altpll_component.clk0_phase_shift       = "0",
