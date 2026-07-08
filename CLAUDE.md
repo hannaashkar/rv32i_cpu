@@ -265,8 +265,66 @@ chose in-order-first + minimal/stall latency + PLL/SDC):
   untouched (only pll.v + .sdc file-list entries added). **Branch not yet
   merged to main / not pushed** — pending Hanna's review.
 
-**Next**: (1) merge `bram-mem-sync` after review; (2) port the BRAM+PLL
-scheme to `ooo_cpu` and switch the FPGA top to it; (3) imem block-RAM via
-`ram_init_file` + the on-board MLP demo; (4) speculative loads + LQ (the
-remaining OoO IPC stage). Physical board bring-up (programming the .sof,
-eyeballing the walker) is Hanna's step.
+**2026-07-07 (later)** — both cores now demonstrated on the DE10-Lite:
+- **In-order core HARDWARE-CONFIRMED** at 50 MHz: `bram-mem-sync` merged to
+  main + pushed + tagged **`v3.1-inorder-fpga`**; the self-paced LED walker
+  runs live (block-RAM dmem, PLL, timing-closed). First on-silicon demo past
+  the CoreMark baseline.
+- **OoO core board port** (branch `ooo-bram-port`, D018, **NOT merged** —
+  main stays in-order): ooo_cpu got the same IPC-neutral dmem `SYNC_READ`
+  load fold (lockstep-clean 12/12+40/40+25/25); de10_top switched to
+  ooo_cpu. **OoO Fmax = 8.42 MHz — critical path entirely in the issue-queue
+  select+wakeup** (`ooo_iq` u[0]→r2, ~118 ns; the classic OoO limiter, not
+  imem/dmem). Clocked at **7.14 MHz** (PLL /7), timing MET +9.35 ns, dmem
+  block RAM (103 segments); the OoO walker runs live on the board (~1.7 s/
+  step). **Lesson: perf = IPC × Fmax** — OoO's +18.8% IPC is stranded by its
+  7× lower Fmax here (~6× slower wall-clock), until the scheduler is
+  pipelined.
+
+**2026-07-08** — branch `ooo-iq-pipeline` (pushed, NOT merged; Hanna
+overrode the hands-only rule for this work):
+- **Task 1 DONE (D019): OoO issue-queue select pipelined.** `ooo_iq.pick()`
+  rewritten from a 16-deep serial min-chain to a balanced log-depth tree
+  (bit-identical grant via lower-index tie-break) + parallel port-1 select.
+  **STA Fmax 8.42 → 19.65 MHz (2.33×), IPC bit-identical** (12/12+40/40+25/25
+  lockstep-clean; hello.c 1914/1882 unchanged). Board PLL /7→/3 = 16.67 MHz,
+  timing MET +18.9 ns, 44,422 LEs. New limiter = the wakeup path (scan gone).
+  Honest: OoO still needs ~42 MHz to tie in-order's 50 MHz — the true 2-stage
+  pipelined scheduler is the deferred next step (Hanna chose "bank 19.65").
+  Design adversarially verified before coding (naive "register the grant"
+  split rejected: it costs 1 bubble/pair).
+- **Task 2 DONE (D020): speculative loads + load queue.** `ooo_lq.v` (8-entry
+  LQ + store→younger-load violation CAM), `SPEC_LOADS=1` relaxes the
+  conservative load gate for RAM loads (IO/NPU keep strong ordering), aRAT +
+  `rob_poison` + multi-cycle flush-at-head "Strategy B-real" recovery (a
+  violated load owns no checkpoint → `rat<=arat` + per-cycle freelist rebuild).
+  **The `ld_st` failure was B013, NOT the WIP handoff's hypothesis:** the
+  violation flush never cleared the IQ — it reused the branch path with
+  `flush_tag=head_tag−1`, but the 6-bit relage predicate makes `>63` always
+  false → ZERO entries cleared → stale pre-flush IQ entries re-issued with
+  reallocated phys regs. Fix = a real `flush_all` port on `ooo_iq`
+  (`lq_flush_start`). **Verified:** OoO 14/14 regress + 40/40 riscv-tests
+  (incl. `ld_st`, ~49 violation+recovery events) + 25/25 random + a new 25/25
+  `--vio` stress suite (1185 real violations), all lockstep-clean; in-order
+  untouched (14/14+40/40+25/25). **IPC is governed by violation frequency
+  because the flush-at-head recovery is a heavy ~46-cyc drain: CoreMark
+  (violations rare) IPC 1.026 spec vs 1.006 cons = +2.0%; hello.c (15 stack-
+  spill violations / 1882 instr) 2613 cyc spec vs 1921 cons = −36%.** Both
+  CRC/lockstep-clean. NET win needs violation-sparse code — **open Hanna call:
+  keep SPEC_LOADS=1, default off, or add a store-set predictor to stop
+  re-speculating a load that violated** (see D020). **Fmax 26.32 MHz** slow-85C (bare `ooo_cpu`
+  top, 48,238 LEs/97%, 16 DSP) — the LQ CAM did NOT erode the D019 wall
+  (crit path = load-uop→CAM→`rob_poison`, still clocks above the wakeup
+  limiter). `ooo_lq.v` added to `synth/rv32i_cpu.qsf`; `make regress-rand-vio`
+  + `verify-ooo` updated. `docs/LQ_WIP_HANDOFF.md` marked DONE.
+- **Build gotcha:** Verilator builds SILENTLY FAIL without
+  `VERILATOR_ROOT=…/ucrt64/share/verilator` exported.
+
+**Next**: (1) **Merge decision (Hanna):** `ooo-iq-pipeline` now carries two
+independent, fully-verified pieces — Task 1 (D019 IQ pipelining, Fmax 2.33×) and
+Task 2 (D020 spec loads, +2.0% CoreMark IPC). Both are OoO-only; `main` stays
+in-order. Options: merge the branch as-is, or split Task 1 to its own branch and
+merge separately. (2) **imem block-RAM via `ram_init_file`** (even/odd
+single-port banks) + on-board MLP demo (Task 3, low risk). (3) The deeper
+2-stage pipelined scheduler (to actually beat in-order on HW; needs ~42 MHz)
+remains a separate future project.

@@ -7,6 +7,44 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 
 ---
 
+## B013 — OoO load-violation flush-at-head does not clear the issue queue (stale IQ entries re-issue) — FIXED (2026-07-08)
+
+- **Symptom:** With speculative loads (D020, `SPEC_LOADS=1`), the official
+  riscv-test `ld_st` failed in lockstep: the machine ran down the test's
+  `fail` path (retired `pc=0xe68`) where the ISS expected `pc=0x48`. The
+  directed `lq_violation.S` and the 25 plain random seeds all passed, so the
+  poison + flush-at-head recovery *looked* correct; only a dense
+  store→same-address stream tripped it.
+- **Root cause:** the load-ordering-violation flush-at-head must empty the
+  **whole** issue queue (every resident uop is younger-or-equal to the
+  poisoned load at the ROB head). The IQ was flushed by *reusing the
+  branch-mispredict path* with `flush_tag = head_tag - 1`, intending "every
+  entry is younger than head−1, so clear all." But the age predicate is
+  `(u.tag − head_tag) > (flush_tag − head_tag)`, and `(head_tag−1) − head_tag
+  = 6'd63`; a resident entry's relage is a 6-bit value in `[0,63]`, so
+  `relage > 63` is **never true**. The violation flush therefore cleared
+  **zero** IQ entries. After the freelist/RAT rebuild refetched the load's PC
+  and re-dispatched, the surviving pre-flush IQ entries (same ROB tags,
+  reused this round) re-issued with their **old** `ps1`/`ps2` — physical
+  registers since reallocated to unrelated values. A branch dependent on the
+  re-read load then resolved twice (once correct, once on the stale copy) and
+  the stale copy mis-redirected to `fail`. The SQ (`commit_tail4`) and LQ
+  (`flush_all`) already had proper unconditional clears; only the IQ relied on
+  the arithmetically-impossible `head_tag−1` trick.
+- **How caught:** golden-model lockstep pinned the retired PC (`0xe68` vs
+  `0x48`); a cycle-stamped RTL trace (`+define+LQ_TRACE2`, temporary) then
+  showed the *same* ROB tag issuing twice with different `ps1`/`ps2` after the
+  flush — a survived-IQ-entry signature, not the pre-flush-branch race the
+  WIP handoff had hypothesized.
+- **Fix:** give `ooo_iq` a dedicated `flush_all` port that unconditionally
+  clears every `v[i]`, driven by `lq_flush_start` (taking priority over the
+  tag-relative branch squash). Removed the broken `head_tag−1` argument;
+  `flush_en`/`flush_tag` now carry only the branch mispredict. `ld_st` passes
+  (928 instrs lockstep-clean, ~49 real violation+recovery events); full OoO
+  suite green (14/14 + 40/40 + 25/25 + new 25/25 `--vio` stress with 1185
+  violations). IPC-neutral: the plain random seeds are byte-identical and
+  CoreMark is unaffected by the fix path (violations are rare there).
+
 ## B012 — Synchronous fetch loses the stalled instruction (fetch register not held) — FIXED (2026-07-07)
 
 - **Symptom:** After moving the in-order core to synchronous instruction

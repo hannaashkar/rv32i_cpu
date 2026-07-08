@@ -22,7 +22,15 @@
 // ============================================================================
 `include "ooo_uop.vh"
 
-module ooo_iq (
+module ooo_iq #(
+    // SPEC_LOADS=1 (D020): a load is eligible even when older stores still
+    // have unknown addresses — speculative loads. The load queue's violation
+    // CAM catches the rare real conflict and replays via flush-at-head. When
+    // 0, the original conservative gate holds (a load waits for mask==0).
+    // IO/NPU strong ordering is preserved regardless, at EX (p2_replay on
+    // sq_qolder), so speculation is safe for those too.
+    parameter SPEC_LOADS = 1
+) (
     input  wire              clk,
     input  wire              reset,
 
@@ -56,9 +64,15 @@ module ooo_iq (
     input  wire              ldone_en,
     input  wire [5:0]        ldone_tag,
 
-    // squash: kill entries strictly younger than flush_tag
+    // squash: kill entries strictly younger than flush_tag (branch mispredict)
     input  wire              flush_en,
     input  wire [5:0]        flush_tag,
+    // full flush (load-ordering-violation flush-at-head, D020): clear EVERY
+    // resident entry. A tag-relative "younger than head-1" trick cannot express
+    // "all" in modular ROB-tag arithmetic (relage is 6-bit, so > 63 is never
+    // true), so the violation flush needs its own unconditional clear — same
+    // pattern the SQ (commit_tail4) and LQ (flush_all) already use.
+    input  wire              flush_all,
 
     // selects
     output reg               sel0_v,
@@ -92,7 +106,11 @@ module ooo_iq (
             wire ready = v[g] && !issued[g] && r1[g] && r2[g];
             wire is_ctrl = u[g][`U_ISBR] | u[g][`U_ISJALR];
             wire is_mem  = u[g][`U_ISLOAD] | u[g][`U_ISSTORE];
-            wire ld_ok   = !u[g][`U_ISLOAD] || (mask[g] == 8'b0);
+            // conservative: a load waits until all older store addresses are
+            // known (mask==0). Speculative (SPEC_LOADS): a load may issue
+            // anyway; the LQ violation CAM repairs a real conflict (D020).
+            wire ld_ok   = !u[g][`U_ISLOAD] || (mask[g] == 8'b0)
+                           || (SPEC_LOADS != 0);
             assign elig_br[g]  = ready && is_ctrl;
             assign elig_alu[g] = ready && !is_ctrl && !is_mem;
             assign elig_mem[g] = ready && is_mem && ld_ok;
@@ -100,22 +118,60 @@ module ooo_iq (
         end
     endgenerate
 
-    // oldest-first pick over an eligibility vector (serial min chain —
-    // fine at 16 entries; timing work is a later, measured stage)
+    // oldest-first pick over an eligibility vector.
+    //
+    // TIMING (D019, increment 1a): the previous version was a 16-deep serial
+    // min-chain — each iteration's winner fed the next, so synthesis built a
+    // ~16-level ripple that dominated the OoO critical path (the 8.42 MHz
+    // Fmax cap, D018). This is a *balanced log-depth reduction tree* that
+    // returns the BIT-IDENTICAL result in ~4 combine levels instead of 16.
+    //
+    // Each leaf is a candidate packed as {found, age[5:0], idx[3:0]} (11b).
+    // `cmb2` combines two candidates keeping the OLDER (smaller relage), and
+    // on an age TIE keeps the LEFT (lower-index) operand — which reproduces
+    // the serial loop's strict `<` tie-break (first/lowest index at the min
+    // age wins) exactly, so the grant index is unchanged and the schedule is
+    // cycle-for-cycle identical (IPC-neutral). Verified by lockstep.
+    localparam CANDW = 11;                 // {found(1), age(6), idx(4)}
+
+    function [CANDW-1:0] cmb2;             // combine two candidates
+        input [CANDW-1:0] a;               // left  (lower index range)
+        input [CANDW-1:0] b;               // right (higher index range)
+        reg a_f, b_f;
+        reg [5:0] a_age, b_age;
+        begin
+            a_f = a[10]; b_f = b[10];
+            a_age = a[9:4]; b_age = b[9:4];
+            // keep b only if a is empty, or b is strictly older than a.
+            // (strict `>` for a's age => on a tie, keep a = the left/lower
+            //  index => matches the serial loop's `relage[k] < best`.)
+            if (!a_f)                       cmb2 = b;
+            else if (b_f && (a_age > b_age)) cmb2 = b;
+            else                            cmb2 = a;
+        end
+    endfunction
+
     function [4:0] pick;  // returns {found, idx[3:0]}
         input [IQD-1:0] e;
-        reg  [5:0] best;
-        reg  [3:0] bi;
-        reg        f;
-        integer    k;
+        // leaf candidates
+        reg [CANDW-1:0] c  [0:15];
+        // tree levels (16 -> 8 -> 4 -> 2 -> 1)
+        reg [CANDW-1:0] l8 [0:7];
+        reg [CANDW-1:0] l4 [0:3];
+        reg [CANDW-1:0] l2 [0:1];
+        reg [CANDW-1:0] top;
+        integer j;
         begin
-            best = 6'd63; bi = 4'd0; f = 1'b0;
-            for (k = 0; k < IQD; k = k + 1) begin
-                if (e[k] && (!f || (relage[k] < best))) begin
-                    f = 1'b1; best = relage[k]; bi = k[3:0];
-                end
-            end
-            pick = {f, bi};
+            for (j = 0; j < 16; j = j + 1)
+                c[j] = {e[j], relage[j], j[3:0]};   // found=e[j]; age; index
+            for (j = 0; j < 8; j = j + 1)
+                l8[j] = cmb2(c[2*j], c[2*j+1]);
+            for (j = 0; j < 4; j = j + 1)
+                l4[j] = cmb2(l8[2*j], l8[2*j+1]);
+            for (j = 0; j < 2; j = j + 1)
+                l2[j] = cmb2(l4[2*j], l4[2*j+1]);
+            top = cmb2(l2[0], l2[1]);
+            pick = {top[10], top[3:0]};              // {found, idx}
         end
     endfunction
 
@@ -133,15 +189,31 @@ module ooo_iq (
     wire       gr0_v    = p_br[4] | p_alu0nc[4];
     wire [3:0] gr0_i    = p_br[4] ? p_br[3:0] : p_alu0nc[3:0];
 
-    // port1: oldest ALU/CSR excluding port0's grant
-    wire [IQD-1:0] elig_alu_m1;
-    generate
-        for (g = 0; g < IQD; g = g + 1) begin : M1
-            assign elig_alu_m1[g] = elig_alu[g]
-                                    && !(gr0_v && (gr0_i == g[3:0]));
-        end
-    endgenerate
-    wire [4:0] p_alu1 = pick(elig_alu_m1);
+    // port1: oldest ALU/CSR excluding port0's grant.
+    //
+    // TIMING (D019, increment 1b): the previous version masked out gr0_i and
+    // re-scanned (elig_alu_m1), so port1's pick could not start until port0's
+    // grant (gr0_i) had resolved — two age-scans in series, a second long
+    // pole after 1a. Instead compute the oldest AND second-oldest ALU op IN
+    // PARALLEL (the 2nd is a find-first over the same vector with the 1st
+    // winner's one-hot cleared — one extra shallow tree, not a dependent
+    // re-scan), then resolve port1 with a terminal mux.
+    //
+    // Set semantics preserved EXACTLY: port1 = oldest ALU/CSR excluding
+    // port0's actual grant. Port0 only ever removes an ALU entry from the
+    // set when it took that exact ALU op — so substitute the 2nd-oldest ONLY
+    // when gr0 took the 1st-oldest ALU index. When port0 took a BRANCH,
+    // gr0_i is not an elig_alu member at all, so the exclusion was a no-op in
+    // the old code too, and port1 correctly gets the oldest ALU (p_alu_1st).
+    // Verified equivalent by lockstep (not by inspection).
+    wire [4:0] p_alu_1st = pick(elig_alu);
+    wire [IQD-1:0] onehot_1st = (p_alu_1st[4])
+                               ? (16'b1 << p_alu_1st[3:0]) : 16'b0;
+    wire [IQD-1:0] elig_alu_no1 = elig_alu & ~onehot_1st;
+    wire [4:0] p_alu_2nd = pick(elig_alu_no1);
+
+    wire port0_took_alu1st = gr0_v && p_alu_1st[4] && (gr0_i == p_alu_1st[3:0]);
+    wire [4:0] p_alu1 = port0_took_alu1st ? p_alu_2nd : p_alu_1st;
 
     // port2: oldest memory op
     wire [4:0] p_mem = pick(elig_mem);
@@ -251,8 +323,12 @@ module ooo_iq (
                 mask[free1]   <= disp1_mask;
             end
 
-            // squash LAST: overrides dispatch/wakeup of dying entries
-            if (flush_en) begin
+            // squash LAST: overrides dispatch/wakeup of dying entries.
+            // flush_all (violation flush-at-head) empties the whole IQ; it
+            // takes priority over the tag-relative branch squash.
+            if (flush_all) begin
+                for (i = 0; i < IQD; i = i + 1) v[i] <= 1'b0;
+            end else if (flush_en) begin
                 for (i = 0; i < IQD; i = i + 1)
                     if (v[i] && ((u[i][`U_TAG] - head_tag)
                                  > (flush_tag - head_tag)))

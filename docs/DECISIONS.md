@@ -5,6 +5,197 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D020 — 2026-07-08 — Speculative loads + load queue (LQ) with poison + flush-at-head recovery; CoreMark IPC 1.006 → 1.026 (+2.0%)
+
+**Context:** Before this, OoO loads were **conservative** — a load issued only
+once every older store's address was known (the IQ `mask==0` gate). A load
+therefore stalled behind any un-executed older store even when they targeted
+different addresses, leaking IPC on pointer/list/struct code. The goal (Task 2)
+was to let a load issue *early* (speculating no conflict) and detect/repair the
+rare real store→younger-load ordering violation. `docs/LQ.md` is the binding
+spec.
+
+**What Hanna chose (from a 3-way adversarial design analysis — structure /
+recovery / ISS-lockstep):** LQ depth **8**; recovery = **poison + flush at the
+ROB head (Strategy B-real)**. A design-pass against `ooo_cpu.v` corrected the
+first draft's assumption that "the arch RAT is the recovery state, zero new
+logic": there is *no* architectural RAT and retirement returns freed phys regs
+only incrementally, and a load owns no checkpoint — so branch-style single-cycle
+restore is impossible. The real mechanism therefore adds an **architectural RAT
+`arat[]`** (committed at retire) and makes a violation a **multi-cycle
+flush-at-head drain**: freeze the front-end, `rat<=arat`, empty the ROB, and
+rebuild the freelist ring from the arch map (one phys tag per cycle). Rare
+(fires only on a real violation) so the drain cost is negligible on real code.
+
+**What was implemented (branch `ooo-iq-pipeline`):**
+- `rtl/ooo/ooo_lq.v` (new): 8-entry LQ; alloc at dispatch (program order), set
+  `executed`+`waddr`+`bytemask` at the port2 read, free at retire. A
+  combinational **violation CAM** fires when a store fills its address against
+  every valid+executed **younger** LQ entry that overlaps in word-address AND
+  byte-mask; the oldest such younger load is poisoned.
+- `SPEC_LOADS=1` param on `ooo_iq` relaxes the load gate for **RAM** loads only
+  (IO/NPU keep strong-ordering replay, INV-10). `arat` + `rob_poison` +
+  flush-at-head FSM + per-cycle freelist rebuild in `ooo_cpu.v`.
+- ISS/lockstep unchanged: a violated load never retires its stale value and
+  re-reads after recovery, so speculation is invisible to the golden model
+  (exactly as branch speculation already is).
+
+**Bug found + fixed on the way (B013):** the load-violation flush-at-head did
+**not** clear the issue queue — it reused the branch-mispredict path with
+`flush_tag = head_tag − 1` intending "everything is younger than head−1," but
+the 6-bit relage predicate makes `relage > 63` always false, so it cleared zero
+IQ entries. Surviving pre-flush IQ entries then re-issued post-flush with
+reallocated physical registers and corrupted the fetch stream (`ld_st` ran to
+its `fail` path). Fix: a dedicated `flush_all` port on `ooo_iq` (unconditional
+clear), driven by `lq_flush_start`. See BUGLOG B013. Caught by lockstep on the
+official riscv-test `ld_st`, root-caused with a cycle-stamped RTL trace (the
+same ROB tag issuing twice with different `ps1`/`ps2` — a survived-entry
+signature, NOT the pre-flush-branch race the WIP handoff hypothesized).
+
+**Result — correctness:** OoO **14/14** directed + **40/40** riscv-tests
+(incl. `ld_st`, ~49 real violation+recovery events, lockstep-clean) + **25/25**
+plain random + a new **25/25 `--vio`** stress suite (violation-forcing pattern
+injected into the random generator: **1185** real violations across the seeds,
+all lockstep-clean). The plain seeds are byte-identical to before, and the
+in-order core is untouched (14/14 + 40/40 + 25/25). The `--vio` generator mode
+closes the LQ.md Inc-0 coverage gap: the plain seeds essentially never violate
+(0 across 25), so without it the recovery path was exercised only by two
+directed tests.
+
+**Result — IPC, and the honest tradeoff (needs a Hanna call):** the net effect
+of speculation is **entirely governed by how often loads actually violate**,
+because the "Strategy B-real" recovery is a **heavy ~46-cycle flush-at-head
+drain** (the ~64-cycle freelist rebuild + refetch). Measured both ways
+(`SPEC_LOADS=1` vs `0`, otherwise-identical builds, all lockstep-clean):
+
+| Workload | violations | conservative | speculative | Δ |
+|---|---|---|---|---|
+| **CoreMark** (432.9M instr) | ~0 (rare) | IPC 1.006, 430.4M cyc | IPC 1.026, 421.8M cyc | **+2.0%** |
+| **hello.c** (1882 instr) | 15 | 1921 cyc (IPC 0.98) | 2613 cyc (IPC 0.72) | **−36%** |
+| `ld_st` / `lq_violation.S` | 49 / 2 | faster | much slower | worst case |
+
+So speculation **wins on violation-sparse code** (CoreMark: violations amortized
+over hundreds of millions of instructions → +2.0%, both CRC-correct) but
+**loses badly on violation-dense code** (hello.c's recursion spills the stack;
+each stack store→reload violates → 15 × ~46-cycle drains dominate a 1882-instr
+program → −36%). This is NOT a bug — it is the designed cost of a
+checkpoint-free load (Strategy B trades per-load HW for a rare-but-expensive
+drain). **Open architectural question for Hanna:** (a) keep `SPEC_LOADS=1` (bet
+on real workloads being violation-sparse, like CoreMark); (b) default it OFF and
+enable per-program; or (c) make speculation *cheaper to recover* — e.g. a
+cheaper squash than the full freelist rebuild (checkpoint the freelist head at
+each spec load), or a **store-set / dependence predictor** that stops
+speculating a load once it has violated (the standard fix — turns hello.c's
+repeated spills back into conservative loads after the first violation). The
+recovery cost, not the CAM, is the real lever here.
+
+**Result — Fmax (Quartus 20.1, 10M50DAF484C7G, `ooo_cpu` top, slow-85C):**
+**Fmax 26.32 MHz**, fit 0 errors, 48,238 LEs (97 %, up from D019's 44,422 — the
+LQ + CAM cost), 16 DSP. **The LQ CAM did NOT erode the D019 19.65 MHz wall** —
+26.32 ≥ 19.65. The worst-case path *is* now LQ-adjacent (load-uop →
+violation-CAM overlap → `rob_poison[]` set), exactly where LQ.md's Fmax-caution
+predicted it might land, but it still clocks above the D019 wakeup limiter, so
+the escape hatch (register the violation: detect in N, poison in N+1) was not
+needed. Method caveat: this is a self-contained **bare-`ooo_cpu`-top** STA
+project (a `create_clock` on the raw `clk`, false-paths on reset/switches/leds),
+the same style used to characterize D019/D018; the number is directly
+comparable to the 19.65/8.42 lineage. An exact same-fitter-run A/B on the pre-LQ
+RTL was attempted (git worktree at commit 847dc31) but that map was
+pathologically slow on this machine and was abandoned — the standalone 26.32 MHz
+measurement stands on its own and answers the question (CAM did not erode Fmax).
+LEs at 97 % are tight; the on-board OoO top still needs the D018 PLL retarget and
+lives on the separate `ooo-bram-port` branch — this STA is a characterization
+build, not a board bitstream.
+
+**Honest scope:** the OoO core still needs ~42 MHz to tie the in-order core's
+50 MHz wall-clock (perf = IPC × Fmax; D018/D019). Speculative loads add IPC, not
+Fmax — the deeper 2-stage pipelined scheduler remains the separate future step.
+
+## D019 — 2026-07-08 — OoO issue-queue select rewritten as a log-depth tree; Fmax 8.42 → 19.65 MHz (IPC-neutral)
+
+**Context:** D018 found the OoO Fmax capped at 8.42 MHz by the issue-queue
+select+wakeup path (~118 ns). The un-pipelined scheduler is the classic OoO
+limiter. Hanna chose to attack it. An adversarial 3-way design analysis
+(cycle-accuracy, correctness, FPGA-timing) established that the *dominant*
+cost was NOT the wakeup but the O(16) **serial oldest-first age-scan** in
+`pick()` (~75% of the path) and its port0→port1 chaining, and that the
+obvious "register the grant" 2-stage split would silently cost 1 bubble per
+dependent pair (IPC loss). The IPC-neutral path is to shorten the scan while
+keeping the tag broadcast same-cycle.
+
+**What was done (branch ooo-iq-pipeline, decision D019, two verified increments):**
+- **1a — balanced-tree `pick()`.** Replaced the 16-deep serial min-chain with
+  a log-depth reduction tree (16→8→4→2→1, ~4 combine levels). `cmb2` keeps
+  the older candidate and, on an age tie, the lower-index (left) operand —
+  bit-identical to the serial loop's strict `<` tie-break, so the grant index
+  is unchanged.
+- **1b — parallel port-1 select.** port1's pick no longer re-scans
+  `elig_alu` minus port0's grant (which serialized it behind port0). Instead
+  the oldest AND second-oldest ALU are found in parallel (2nd = find-first
+  with the 1st winner's one-hot cleared) and port1 is a terminal mux:
+  substitute the 2nd only when port0 actually took the 1st ALU entry.
+  Preserves the exact "exclude port0's actual grant; branch-on-port0 is a
+  no-op exclusion; CSR-oldest lands on port1" semantics.
+
+**Result (Quartus 20.1, 10M50DAF484C7G, OoO top):** STA slow-85C **Fmax
+19.65 MHz** (was 8.42) — a **2.33× clock improvement** — fitter 0 errors,
+44,422 LEs (89%, no bloat vs baseline). **IPC bit-identical (1.008):**
+`hello.c` cycles/instret unchanged (1914/1882); OoO 12/12 regress + 40/40
+riscv-tests + 25/25 random seeds all lockstep-clean, zero divergence. The new
+STA critical path is the load-result → `wakes()` → `r2` ready-bit wakeup
+(~50.9 ns) — i.e. the scan is gone and the residual limiter is the wakeup
+broadcast, exactly as predicted. PLL retargeted 50 MHz /7 → **/3 = 16.67 MHz**
+(≈15% margin under 19.65). Options weighed: (a) bank 19.65 + move on [CHOSEN
+— clean, honest, IPC-neutral, defensible]; (b) push the true 2-stage
+pipelined scheduler now [~40–50 MHz but IPC-risked, large — SCOPED AS FUTURE
+WORK]; (c) increment 1c `mask_zero` flop for ~22–25 MHz [deferred — still
+short of break-even].
+
+**Lesson (interview-grade):** perf = IPC × Fmax, and the OoO core needs
+Fmax ≥ ~42 MHz just to TIE the in-order core's 50 MHz wall-clock (its IPC
+edge is only +18.8%). The tree/parallel-pick rewrite is a real, measured,
+zero-IPC-cost 2.33× — but realizing the OoO's IPC win on THIS board requires
+the deeper pipelined scheduler (which does risk IPC and is a separate,
+IPC-measured, Hanna-signed-off increment). Attacking the *scan* first was
+correct: it is where the timing was, it was provably IPC-neutral, and its STA
+result is what tells us the wakeup broadcast is the next wall.
+
+## D018 — 2026-07-07 — OoO core FPGA board port; clocked at 7.14 MHz (issue-queue Fmax cap)
+
+**Context:** After the in-order core reached the board (D016/D017), the goal
+was to run the 2-wide OoO core (ooo_cpu) on the DE10-Lite too. Hanna chose
+"BRAM port first, LQ later" and green-lit the implementation.
+
+**What was done (branch ooo-bram-port, NOT merged — main stays in-order):**
+- dmem `SYNC_READ=1` on ooo_cpu with an IPC-neutral load fold, same principle
+  as the in-order core: the load result lands in the SAME writeback cycle it
+  did before, so load-to-use (2 cyc), wakeup and the mispredict path are
+  unchanged. The RAM select is deferred to WB —
+  `wb_result2 = wb2_use_dmem ? dmem_rdata : wb_val[2]` — feeding the three
+  consumers (PRF write, EX bypass, ROB value). SQ-forward/MMIO/NPU are
+  captured into wb_val[2] at EX→WB; a plain RAM load takes the registered
+  dmem read in WB. No combinational loop (the registered read breaks
+  addr→data). imem left combinational: it is not on the critical path, and
+  would not infer M9K anyway (same MAX 10 initialized-ROM limit as in-order).
+- de10_top switched from cpu_pipeline to ooo_cpu (drop-in, same interface).
+
+**The finding:** STA gives **OoO Fmax = 8.42 MHz**. The critical path is
+ENTIRELY inside the issue queue (`ooo_iq:IQ0` u[0] → r2, ~118 ns): the
+un-pipelined select + wakeup + tag-broadcast across 16 entries — the classic
+OoO Fmax limiter — on MAX 10's budget fabric. imem/dmem are not on it.
+
+**Decision:** clock the OoO core at 7.14 MHz (PLL `clk0_divide_by=7`) with
+margin instead of pipelining the scheduler now. Timing MET (+9.35 ns), dmem
+block RAM (103 segments), 0 errors; the OoO walker runs on the board
+(~1.7 s/step). Options weighed: (a) run slow now [chosen — cheap, proves
+OoO-on-silicon], (b) pipeline the IQ select-wakeup [big stage, raises Fmax,
+changes IPC — deferred], (c) keep OoO sim-only.
+
+**Lesson (worth stating in an interview):** wall-clock perf = IPC × Fmax. The
+OoO core wins per-MHz (+18.8% IPC) but its 7× lower Fmax makes it ~6× slower
+on THIS board. Realizing the IPC win on hardware requires pipelining the
+issue queue — the recommended next OoO stage.
+
 ## D017 — 2026-07-07 — PLL clock + real .sdc for honest timing closure (B005)
 
 **Context:** The CPU had been clocked by bit 25 of a free-running counter (a

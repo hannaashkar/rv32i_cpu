@@ -33,10 +33,12 @@ modeled exactly; a quirk is architecture once documented.
 | Directed suites (`sw/tests/*.S`, `sw/ctests/*.c`) | `make regress` | Targeted corner cases: hazards found as real bugs (B004/B007/B008 regressions), BTB-stale returns, sub-word lanes, CSR semantics, exact instret deltas, the C runtime |
 | Official ISA tests (riscv-tests rv32ui, vendored) | `make regress-isa` | 40/40 third-party acceptance tests — the industry's definition of "implements RV32I" |
 | Constrained-random (`scripts/gen_random_test.py`) | `make regress-rand` | 25 seeds × 3000 instructions of weighted-random mix incl. misaligned accesses and dense hazards; forward-only control flow guarantees termination; reproducible by seed |
+| LQ-violation stress (`--vio` mode, OoO only) | `make regress-rand-vio` | Same 25 seeds but with a late-store/early-load-to-same-address pattern injected so the D020 speculative-load violation CAM + poison + flush-at-head recovery actually fires (1185 real violations across the seeds; the plain seeds essentially never violate). Guards B013. |
 | Benchmark | `make coremark` | 433M-instruction real-workload run, CRC-validated AND lockstep-checked |
 
-`make verify` = regress + regress-isa + regress-rand. All green is the
-merge gate for `main`.
+`make verify` = regress + regress-isa + regress-rand. `make verify-ooo` adds
+`regress-rand-vio` (the LQ recovery path). All green is the merge gate for
+`main`.
 
 ## Exclusions (documented, not hidden)
 

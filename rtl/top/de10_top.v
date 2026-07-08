@@ -46,7 +46,11 @@ module de10_top (
     // NOTE: the CPU now runs at the full PLL frequency, so a program that
     // wants human-visible LED activity must pace itself in software (delay
     // loops / rdcycle) rather than relying on a slow clock (B005).
-    cpu_pipeline CPU0 (
+    //
+    // FPGA top is now the 2-wide OUT-OF-ORDER core (board port, D013/D016).
+    // ooo_cpu is a drop-in replacement for cpu_pipeline (identical
+    // clk/reset/leds/switches interface); its dmem is block-RAM (SYNC_READ).
+    ooo_cpu CPU0 (
         .clk      (cpu_clk),
         .reset    (reset),
         .leds     (LEDR),    // LEDs are fully driven by the CPU via MMIO

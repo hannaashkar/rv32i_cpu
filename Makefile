@@ -267,6 +267,23 @@ regress-rand: $(RUN_BIN)
 	    $$pass $(RAND_SEEDS) $(RAND_LEN); \
 	[ $$fail -eq 0 ]
 
+# --vio variant (D020): same seeds but with the load-ordering-violation
+# stress pattern injected, so the LQ poison + flush-at-head recovery fires
+# under random interleaving (the plain seeds essentially never violate).
+regress-rand-vio: $(RUN_BIN)
+	@mkdir -p build/rand; pass=0; fail=0; \
+	for s in $$(seq 1 $(RAND_SEEDS)); do \
+	  $(PYTHON) scripts/gen_random_test.py $$s build/rand/vio_$$s.hex $(RAND_LEN) --vio; \
+	  if out=$$(./$(RUN_BIN) +imem=build/rand/vio_$$s.hex); then \
+	    pass=$$((pass+1)); \
+	  else \
+	    fail=$$((fail+1)); printf 'FAIL  vio seed %s\n%s\n' "$$s" "$$out"; \
+	  fi; \
+	done; \
+	printf 'regress-rand-vio: %d/%d seeds passed (LQ-violation stress, lockstep-checked)\n' \
+	    $$pass $(RAND_SEEDS); \
+	[ $$fail -eq 0 ]
+
 # --- official riscv-tests rv32ui ISA suite (lockstep-checked too) -------------
 # Vendored unmodified from riscv-software-src/riscv-tests; our environment
 # header lives in sw/riscv-tests/env. Excluded: fence_i (Harvard imem has
@@ -308,10 +325,13 @@ regress-isa-ooo:
 	$(MAKE) regress-isa RUN_BIN=$(SIM_BIN_OOO)
 regress-rand-ooo:
 	$(MAKE) regress-rand RUN_BIN=$(SIM_BIN_OOO)
+regress-rand-vio-ooo:
+	$(MAKE) regress-rand-vio RUN_BIN=$(SIM_BIN_OOO)
 coremark-ooo:
 	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO)
-verify-ooo: regress-ooo regress-isa-ooo regress-rand-ooo
-.PHONY: sim-ooo regress-ooo regress-isa-ooo regress-rand-ooo coremark-ooo verify-ooo
+verify-ooo: regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-vio-ooo
+.PHONY: sim-ooo regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-vio-ooo \
+        coremark-ooo verify-ooo
 
 run: $(RUN_BIN)
 	./$(RUN_BIN) +imem=$(PROG) $(DMEM_ARG)
