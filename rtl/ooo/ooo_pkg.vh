@@ -10,6 +10,8 @@ localparam TAGW       = 6;                // ROB tag = {phase, idx}
 localparam IQD        = 16;               // issue queue entries
 localparam SQD        = 8;                // store queue entries
 localparam SQW        = 3;                // log2(SQD)
+localparam LQD        = 8;                // load queue entries (D020)
+localparam LQW        = 3;                // log2(LQD)
 localparam NCHKPT     = 8;                // rename checkpoints
 localparam CHKW       = 3;                // log2(NCHKPT)
 localparam GHRW       = 10;               // gshare history bits

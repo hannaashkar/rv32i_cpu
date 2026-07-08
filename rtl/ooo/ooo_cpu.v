@@ -39,6 +39,21 @@ module ooo_cpu (
     reg         restore_shift;    // conditional? then shift in actual dir
     reg         restore_dir;
 
+    // Load-ordering-violation recovery (D020, Strategy B-real). A poisoned
+    // load flushes at the ROB head via a multi-cycle drain (rare — real
+    // violations only). lq_drain != 0 stalls the whole machine while the
+    // freelist is rebuilt from the architectural map (arat). See docs/LQ.md.
+    // Load-violation flush-at-head is a multi-cycle drain (D020, rare). While
+    // draining, the machine is frozen and the freelist ring is rebuilt one
+    // phys tag per cycle from the architectural map. lq_state: 0=idle,
+    // 1=sweeping. lq_sweep walks phys tags 0..PHYS; lq_wp is the freelist
+    // write pointer (count of free tags found so far).
+    reg         lq_state;
+    reg  [6:0]  lq_sweep;         // 0..PHYS (64) — current phys tag under test
+    reg  [5:0]  lq_wp;            // freelist write pointer / free count
+    reg  [31:0] lq_flush_pc;      // (unused now; kept for probes/future)
+    wire        lq_flushing = lq_state;
+
     // ROB head tag (for all age comparisons)
     reg  [4:0]  rob_head;
     reg         rob_head_ph;
@@ -141,6 +156,16 @@ module ooo_cpu (
             fd_v0 <= 1'b0; fd_v1 <= 1'b0;
             fd_pc0 <= 0; fd_pc1 <= 0; fd_i0 <= 0; fd_i1 <= 0;
             fd_pnpc0 <= 0; fd_pnpc1 <= 0; fd_ghr0 <= 0; fd_ghr1 <= 0;
+        end else if (lq_flush_start) begin
+            // load-ordering-violation flush: refetch from the violated load's
+            // PC (D020). Front-end squashed; dispatch is frozen during drain.
+            pcF   <= rob_pc[h0];
+            fd_v0 <= 1'b0;
+            fd_v1 <= 1'b0;
+        end else if (lq_flushing) begin
+            // hold the fetch PC steady while the freelist rebuild drains
+            fd_v0 <= 1'b0;
+            fd_v1 <= 1'b0;
         end else if (restore_en) begin
             pcF   <= restore_npc;
             fd_v0 <= 1'b0;
@@ -305,7 +330,11 @@ module ooo_cpu (
             dr_actl0<=0; dr_actl1<=0;
             dr_rs10<=0; dr_rs20<=0; dr_rd0<=0; dr_rs11<=0; dr_rs21<=0; dr_rd1<=0;
             dr_f30<=0; dr_f31<=0;
-        end else if (restore_en) begin
+        end else if (restore_en || lq_flush_start || lq_flushing) begin
+            // branch mispredict OR a load-violation flush-at-head: the D/R
+            // group is wrong-path (or stale across the flush drain). Clear it
+            // for the whole flush so no stale uop dispatches when the sweep
+            // ends and the machine refetches the load's PC. (D020)
             dr_v0 <= 1'b0; dr_v1 <= 1'b0;
         end else if (dr_accept) begin
             // load the (possibly redirect-corrected) decode group. A
@@ -353,6 +382,27 @@ module ooo_cpu (
     // R — rename / dispatch
     // =====================================================================
     reg  [5:0] rat  [0:31];
+    // architectural RAT (D020): committed arch->phys map, updated at retire.
+    // The recovery point for a load-ordering-violation flush-at-head, since a
+    // load owns no checkpoint and rat[] is the (polluted) speculative map.
+    reg  [5:0] arat [0:31];
+
+    // is a physical tag currently architectural (mapped by some arch reg)?
+    // Used by the flush-at-head freelist rebuild: every non-architectural tag
+    // (except p0) is free after the flush.
+    function in_arat;
+        input [5:0] ptag;
+        integer j;
+        begin
+            in_arat = 1'b0;
+            for (j = 0; j < 32; j = j + 1)
+                if (arat[j] == ptag) in_arat = 1'b1;
+        end
+    endfunction
+
+    // (flush-at-head freelist rebuild is a per-cycle sweep, D020: see the FSM
+    // in the main clocked block. Each cycle tests ONE phys tag via in_arat,
+    // avoiding a wide nested-unroll that overwhelms elaboration.)
     reg        busy [0:PHYS-1];
     reg  [5:0] fl   [0:31];
     reg  [5:0] fl_alloc, fl_free;             // 6-bit ring counters
@@ -387,10 +437,11 @@ module ooo_cpu (
     wire rob_ge1 = (rob_count <= 6'd31);
     wire rob_ge2 = (rob_count <= 6'd30);
 
-    assign ok0 = dr_v0 && !restore_en
+    assign ok0 = dr_v0 && !restore_en && !lq_flushing && !lq_flush_start
                  && rob_ge1 && iq_ge1
                  && (!dr_wr0  || (fl_avail >= 6'd1))
                  && (!dr_st0  || sq_ge1)
+                 && (!dr_ld0  || lq_ge1)
                  && (!ctrl0   || (chk_avail >= 4'd1))
                  && (!dr_csr0 || rob_empty);
 
@@ -400,6 +451,8 @@ module ooo_cpu (
                  && (fl_avail >= ({5'b0, dr_wr0} + {5'b0, dr_wr1}))
                  && (!(dr_st0 && dr_st1) || sq_ge2)
                  && (!dr_st1 || sq_ge1)
+                 && (!(dr_ld0 && dr_ld1) || lq_ge2)
+                 && (!dr_ld1 || lq_ge1)
                  && (!ctrl1 || (chk_avail >= (ctrl0 ? 4'd2 : 4'd1)));
 
     // rename lookups
@@ -516,13 +569,34 @@ module ooo_cpu (
     reg        rob_ctrl [0:ROBD-1];
     reg [31:0] rob_pc   [0:ROBD-1];
     reg [31:0] rob_val  [0:ROBD-1];
+    reg        rob_ld   [0:ROBD-1];     // load? (for LQ retire-free)
+    reg        rob_poison[0:ROBD-1];    // load-ordering violation (D020)
 
     // retire decisions
     wire [4:0] h0 = rob_head;
     wire [4:0] h1 = rob_head + 5'd1;
-    wire ret0_ok = (rob_count != 6'd0) && rob_v[h0] && rob_done[h0];
+    // A poisoned load at the head triggers a flush instead of retiring
+    // (D020). It must be `done` (its stale read completed). We also wait for
+    // the store queue to fully drain to dmem (sq_empty) BEFORE flushing, so
+    // the re-executed load reads correct memory directly from dmem and does
+    // not depend on post-flush SQ-forward color arithmetic. While the drain
+    // runs (lq_flushing) no instruction retires.
+    wire head_poison = (rob_count != 6'd0) && rob_v[h0] && rob_done[h0]
+                       && rob_poison[h0];
+    // wait until no COMMITTED store is still pending drain (!mw_valid): all
+    // stores older than the poisoned load have retired (it is at the head) so
+    // they are committed; once they have drained to dmem the re-executed load
+    // reads correct memory. Younger uncommitted stores never set mw_valid, so
+    // this does not deadlock (they are killed by the flush's SQ rewind).
+    // The flush takes ABSOLUTE priority: a younger branch's mispredict is
+    // wrong-path relative to the poisoned load, so restore_en is suppressed
+    // whenever a flush starts (see restore_en assignment below).
+    wire lq_flush_start = head_poison && !mw_valid && !lq_flushing;
+
+    wire ret0_ok = (rob_count != 6'd0) && rob_v[h0] && rob_done[h0]
+                   && !rob_poison[h0] && !lq_flushing;
     wire ret1_ok = ret0_ok && (rob_count != 6'd1)
-                   && rob_v[h1] && rob_done[h1]
+                   && rob_v[h1] && rob_done[h1] && !rob_poison[h1]
                    && !(rob_st[h0] && rob_st[h1]);
     wire [1:0] retire_n = {1'b0, ret0_ok} + {1'b0, ret1_ok};
 
@@ -599,8 +673,14 @@ module ooo_cpu (
                                                : ex_u[0][`U_IMM];
     wire [31:0] p0_npc = p0_taken ? p0_target
                                   : (ex_u[0][`U_PC] + 32'd4);
+    // A branch being squashed by a load-violation flush-at-head must NOT
+    // trigger its own mispredict recovery (D020): the whole pipe younger than
+    // the poisoned load is discarded, so a stale in-flight branch's redirect
+    // is wrong-path. Gate on the flush signals (not kill_ex0, which would form
+    // a combinational loop through restore_en).
     wire p0_mispredict = ex_v[0] && p0_isctrl
-                         && (p0_npc != ex_u[0][`U_PNPC]);
+                         && (p0_npc != ex_u[0][`U_PNPC])
+                         && !lq_flush_start && !lq_flushing;
     wire [31:0] p0_result = ex_u[0][`U_ISJALR] ? (ex_u[0][`U_PC] + 32'd4)
                                                : p0_alu;
 
@@ -656,6 +736,8 @@ module ooo_cpu (
 
     // SQ
     wire        sq_qhit, sq_qconf, sq_qolder;
+    wire [3:0]  sq_commit_tail4;
+    wire        sq_empty;
     wire [31:0] sq_qdata;
     wire        mw_valid /*verilator public_flat_rd*/;
     wire [31:0] mw_addr  /*verilator public_flat_rd*/;
@@ -677,9 +759,84 @@ module ooo_cpu (
         .q_addr(p2_addr), .q_color4(ex_u[2][`U_SQCOL]),
         .q_hit(sq_qhit), .q_data(sq_qdata), .q_conflict(sq_qconf),
         .q_older(sq_qolder),
-        .flush_en(restore_en), .flush_tail4(chk_sqt[restore_chk[2:0]]),
+        // flush on branch mispredict OR a load-violation flush-at-head.
+        // Branch: rewind to the branch's checkpointed SQ tail. Violation:
+        // rewind to the committed tail (kill all uncommitted younger stores;
+        // older committed stores survive to drain).
+        .flush_en(restore_en || lq_flush_start),
+        .flush_tail4(lq_flush_start ? sq_commit_tail4
+                                    : chk_sqt[restore_chk[2:0]]),
+        .commit_tail4(sq_commit_tail4),
+        .sq_empty(sq_empty),
         .unknown_mask(sq_unknown)
     );
+
+    // ------------------------------------------------------------------
+    // Load queue (D020): byte mask from funct3 + addr[1:0], violation CAM.
+    // ------------------------------------------------------------------
+    function [3:0] bytemask;
+        input [2:0] f3;
+        input [1:0] a10;
+        reg [3:0] m;
+        begin
+            case (f3[1:0])
+                2'b00:   m = 4'b0001 << a10;              // byte
+                2'b01:   m = 4'b0011 << {a10[1], 1'b0};   // half (aligned)
+                default: m = 4'b1111;                     // word
+            endcase
+            bytemask = m;
+        end
+    endfunction
+
+    wire        lq_ge1, lq_ge2;
+    wire        lq_vio_en;
+    wire [5:0]  lq_vio_tag;
+    // A speculative load is one to a plain RAM address (IO/NPU keep the
+    // conservative strong-ordering replay path, INV-10). Only RAM loads
+    // allocate/execute in the LQ and can be violated.
+    wire        p2_load_ram = p2_load && !p2_io_any;
+
+    ooo_lq LQ0 (
+        .clk(clk), .reset(reset),
+        .head_tag(head_tag),
+        // alloc at dispatch for RAM loads (in program order)
+        .alloc0_en(ok0 && dr_ld0),
+        .alloc0_tag(tag0),
+        .alloc1_en(ok1 && dr_ld1),
+        .alloc1_tag(tag1),
+        .free_ge1(lq_ge1), .free_ge2(lq_ge2),
+        // execute: RAM load performed its read at port2 EX
+        .exec_en(p2_load_ram && !p2_replay),
+        .exec_tag(ex_u[2][`U_TAG]),
+        .exec_waddr(p2_addr[31:2]),
+        .exec_bytemask(bytemask(ex_u[2][`U_F3], p2_addr[1:0])),
+        // store address fill drives the violation CAM
+        .st_fill_en(p2_store),
+        .st_tag(ex_u[2][`U_TAG]),
+        .st_waddr(p2_addr[31:2]),
+        .st_bytemask(bytemask(ex_u[2][`U_F3], p2_addr[1:0])),
+        .vio_en(lq_vio_en), .vio_tag(lq_vio_tag),
+        // retire frees (in order); tags are the retiring ROB entries
+        .retire0_en(ret0_ok && rob_ld[h0]),
+        .retire0_tag(head_tag),
+        .retire1_en(ret1_ok && rob_ld[h1]),
+        .retire1_tag(head_tag + 6'd1),
+        // squash: branch mispredict flushes younger; a violation drain
+        // clears everything (the ROB empties)
+        .flush_en(restore_en), .flush_tag(restore_tag),
+        .flush_all(lq_flush_start)
+    );
+
+`ifdef LQ_PROBE
+    // opt-in violation/flush trace for debugging (enable with +define+LQ_PROBE;
+    // off in normal sim so stdout stays clean for the harness's PASS parsing).
+    always @(posedge clk) if (!reset) begin
+        if (lq_vio_en)
+            $display("[LQ] VIOLATION vio_tag=%0d st_tag=%0d", lq_vio_tag, ex_u[2][`U_TAG]);
+        if (lq_flush_start)
+            $display("[LQ] FLUSH pc=%h", rob_pc[h0]);
+    end
+`endif
 
     // memory write routing (SQ drain -> dmem, mmio or npu). The drain
     // fires only when the target accepts: a busy NPU backpressures via
@@ -791,7 +948,11 @@ module ooo_cpu (
         .rep_en(p2_replay), .rep_tag(ex_u[2][`U_TAG]),
         .ldone_en(ex_v[2] && ex_u[2][`U_ISLOAD] && !p2_replay),
         .ldone_tag(ex_u[2][`U_TAG]),
-        .flush_en(restore_en), .flush_tag(restore_tag),
+        // branch mispredict flushes younger-than-branch; a load-violation
+        // flush-at-head empties the whole IQ (anchor = head_tag-1, so every
+        // resident entry, all >= head, is "younger" and cleared).
+        .flush_en(restore_en || lq_flush_start),
+        .flush_tag(lq_flush_start ? (head_tag - 6'd1) : restore_tag),
         .sel0_v(sel0_v), .sel0_uop(sel0_uop),
         .sel1_v(sel1_v), .sel1_uop(sel1_uop),
         .sel2_v(sel2_v), .sel2_uop(sel2_uop)
@@ -800,30 +961,38 @@ module ooo_cpu (
     // =====================================================================
     // pipeline registers + all core state updates
     // =====================================================================
-    wire kill_rf0 = restore_en && is_younger(rf_u[0][`U_TAG], restore_tag);
-    wire kill_rf1 = restore_en && is_younger(rf_u[1][`U_TAG], restore_tag);
-    wire kill_rf2 = restore_en && is_younger(rf_u[2][`U_TAG], restore_tag);
-    wire kill_ex0 = restore_en && is_younger(ex_u[0][`U_TAG], restore_tag);
-    wire kill_ex1 = restore_en && is_younger(ex_u[1][`U_TAG], restore_tag);
-    wire kill_ex2 = restore_en && is_younger(ex_u[2][`U_TAG], restore_tag);
-    wire kill_s0  = restore_en && is_younger(sel0_uop[`U_TAG], restore_tag);
-    wire kill_s1  = restore_en && is_younger(sel1_uop[`U_TAG], restore_tag);
-    wire kill_s2  = restore_en && is_younger(sel2_uop[`U_TAG], restore_tag);
+    // A load-violation flush-at-head empties the ROB, so it kills EVERY
+    // in-flight uop (all are younger-or-equal to the poisoned head). Fold that
+    // into the kill nets as an unconditional kill while flushing/starting.
+    wire kill_all = lq_flush_start || lq_flushing;
+    wire kill_rf0 = kill_all || (restore_en && is_younger(rf_u[0][`U_TAG], restore_tag));
+    wire kill_rf1 = kill_all || (restore_en && is_younger(rf_u[1][`U_TAG], restore_tag));
+    wire kill_rf2 = kill_all || (restore_en && is_younger(rf_u[2][`U_TAG], restore_tag));
+    wire kill_ex0 = kill_all || (restore_en && is_younger(ex_u[0][`U_TAG], restore_tag));
+    wire kill_ex1 = kill_all || (restore_en && is_younger(ex_u[1][`U_TAG], restore_tag));
+    wire kill_ex2 = kill_all || (restore_en && is_younger(ex_u[2][`U_TAG], restore_tag));
+    wire kill_s0  = kill_all || (restore_en && is_younger(sel0_uop[`U_TAG], restore_tag));
+    wire kill_s1  = kill_all || (restore_en && is_younger(sel1_uop[`U_TAG], restore_tag));
+    wire kill_s2  = kill_all || (restore_en && is_younger(sel2_uop[`U_TAG], restore_tag));
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             for (i = 0; i < 32; i = i + 1) rat[i] <= i[5:0];
+            for (i = 0; i < 32; i = i + 1) arat[i] <= i[5:0];
             for (i = 0; i < PHYS; i = i + 1) busy[i] <= 1'b0;
             for (i = 0; i < 32; i = i + 1) fl[i] <= 6'd32 + i[5:0];
             fl_alloc <= 6'b0; fl_free <= 6'b0;
             chk_a <= 4'b0; chk_f <= 4'b0;
             rob_head <= 5'b0; rob_head_ph <= 1'b0;
             rob_tail <= 5'b0; rob_tail_ph <= 1'b0;
+            lq_state <= 1'b0; lq_sweep <= 7'd0; lq_wp <= 6'd0;
+            lq_flush_pc <= 32'b0;
             for (i = 0; i < ROBD; i = i + 1) begin
                 rob_v[i] <= 1'b0; rob_done[i] <= 1'b0; rob_wr[i] <= 1'b0;
                 rob_rd[i] <= 5'b0; rob_pd[i] <= 6'b0; rob_old[i] <= 6'b0;
                 rob_st[i] <= 1'b0; rob_ctrl[i] <= 1'b0;
                 rob_pc[i] <= 32'b0; rob_val[i] <= 32'b0;
+                rob_ld[i] <= 1'b0; rob_poison[i] <= 1'b0;
             end
             for (i = 0; i < 3; i = i + 1) begin
                 rf_v[i] <= 1'b0; rf_u[i] <= {`UOPW{1'b0}};
@@ -849,6 +1018,8 @@ module ooo_cpu (
                 rob_st[rob_tail]   <= dr_st0;
                 rob_ctrl[rob_tail] <= ctrl0;
                 rob_pc[rob_tail]   <= dr_pc0;
+                rob_ld[rob_tail]   <= dr_ld0;
+                rob_poison[rob_tail] <= 1'b0;
                 if (ctrl0) begin
                     chk_rat [chk_a[2:0]] <= rat_after0;
                     chk_fl  [chk_a[2:0]] <= fl_alloc + {5'b0, dr_wr0};
@@ -871,6 +1042,8 @@ module ooo_cpu (
                 rob_st[rob_tail + 5'd1]   <= dr_st1;
                 rob_ctrl[rob_tail + 5'd1] <= ctrl1;
                 rob_pc[rob_tail + 5'd1]   <= dr_pc1;
+                rob_ld[rob_tail + 5'd1]   <= dr_ld1;
+                rob_poison[rob_tail + 5'd1] <= 1'b0;
                 if (ctrl1) begin
                     chk_rat [chk_tag1[2:0]] <= rat_after1;
                     chk_fl  [chk_tag1[2:0]] <= fl_alloc + {5'b0, dr_wr0}
@@ -964,7 +1137,20 @@ module ooo_cpu (
                 {rob_head_ph, rob_head} <= head_tag + {4'b0, retire_n};
                 chk_f <= chk_f + {3'b0, rob_ctrl[h0]}
                                + {3'b0, ret1_ok && rob_ctrl[h1]};
+                // architectural RAT update (D020): commit the arch->phys map
+                // in program order. slot1 (younger) wins a same-cycle WAW.
+                if (rob_wr[h0]) arat[rob_rd[h0]] <= rob_pd[h0];
+                if (ret1_ok && rob_wr[h1]) arat[rob_rd[h1]] <= rob_pd[h1];
             end
+
+            // ------------------------------ poison (load-ordering violation)
+            // The violation CAM (LQ) names the oldest younger executed load
+            // that a just-filled store overwrote. Mark its ROB entry poisoned
+            // so it flushes when it reaches the head. Suppressed if that entry
+            // is being squashed this cycle by a branch restore.
+            if (lq_vio_en && !(restore_en
+                               && is_younger(lq_vio_tag, restore_tag)))
+                rob_poison[lq_vio_tag[4:0]] <= 1'b1;
 
             // ------------------------------ restore (LAST: wins conflicts)
             if (restore_en) begin
@@ -976,6 +1162,55 @@ module ooo_cpu (
                 for (i = 0; i < ROBD; i = i + 1)
                     if (is_younger({rob_tail_ph_of(i), i[4:0]}, restore_tag))
                         rob_v[i] <= 1'b0;
+            end
+
+            // ------------------------------ load-violation flush-at-head FSM
+            // (D020, Strategy B-real). Rare (real violations only). Phase 1:
+            // snap arch state, empty the ROB, refetch the load's PC, and start
+            // the freelist rebuild. Phases 2..: sweep phys tags, pushing every
+            // non-architectural (not-in-arat) tag back onto the freelist ring.
+            // The whole machine is frozen (dispatch/issue/retire gated on
+            // !lq_flushing) during the drain.
+            if (lq_flush_start) begin
+                // Phase 1: snap architectural state, empty the ROB, and start
+                // the freelist rebuild sweep. The front-end refetch (pcF <=
+                // load PC) and IQ/SQ flush happen in their own always blocks,
+                // gated on lq_flush_start. Dispatch/issue/retire are frozen
+                // while lq_state is set.
+                for (i = 0; i < 32; i = i + 1) rat[i] <= arat[i];
+                {rob_tail_ph, rob_tail} <= head_tag;
+                for (i = 0; i < ROBD; i = i + 1) begin
+                    rob_v[i]      <= 1'b0;
+                    rob_poison[i] <= 1'b0;
+                end
+                // nothing is in flight after a full flush: clear every busy
+                // bit (architectural values committed; freed tags unallocated).
+                for (i = 0; i < PHYS; i = i + 1) busy[i] <= 1'b0;
+                chk_a <= 4'd0; chk_f <= 4'd0;
+                // start the sweep: walk phys tags from 0, write free tags to
+                // fl[0..]. Exactly 32 tags are free after a flush (PHYS=64, 32
+                // architectural incl p0), so lq_wp ends at 32 and the ring
+                // matches the reset layout: fl[0..31] all free, popped from 0.
+                lq_wp    <= 6'd0;
+                lq_sweep <= 7'd0;
+                lq_state <= 1'b1;
+            end else if (lq_state) begin
+                // Phase 2: one phys tag per cycle. Push tag lq_sweep onto the
+                // freelist iff it is not p0 and not architectural (not in arat).
+                if (lq_sweep < PHYS) begin
+                    if ((lq_sweep != 7'd0) && !in_arat(lq_sweep[5:0])) begin
+                        fl[lq_wp[4:0]] <= lq_sweep[5:0];
+                        lq_wp          <= lq_wp + 6'd1;
+                    end
+                    lq_sweep <= lq_sweep + 7'd1;
+                end else begin
+                    // sweep complete: all 32 free tags now in fl[0..31].
+                    // fl_alloc=fl_free=0 => fl_avail=32 (all free), matching
+                    // the reset ring layout exactly.
+                    fl_alloc <= 6'd0;
+                    fl_free  <= 6'd0;
+                    lq_state <= 1'b0;
+                end
             end
         end
     end

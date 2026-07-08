@@ -22,7 +22,15 @@
 // ============================================================================
 `include "ooo_uop.vh"
 
-module ooo_iq (
+module ooo_iq #(
+    // SPEC_LOADS=1 (D020): a load is eligible even when older stores still
+    // have unknown addresses — speculative loads. The load queue's violation
+    // CAM catches the rare real conflict and replays via flush-at-head. When
+    // 0, the original conservative gate holds (a load waits for mask==0).
+    // IO/NPU strong ordering is preserved regardless, at EX (p2_replay on
+    // sq_qolder), so speculation is safe for those too.
+    parameter SPEC_LOADS = 1
+) (
     input  wire              clk,
     input  wire              reset,
 
@@ -92,7 +100,11 @@ module ooo_iq (
             wire ready = v[g] && !issued[g] && r1[g] && r2[g];
             wire is_ctrl = u[g][`U_ISBR] | u[g][`U_ISJALR];
             wire is_mem  = u[g][`U_ISLOAD] | u[g][`U_ISSTORE];
-            wire ld_ok   = !u[g][`U_ISLOAD] || (mask[g] == 8'b0);
+            // conservative: a load waits until all older store addresses are
+            // known (mask==0). Speculative (SPEC_LOADS): a load may issue
+            // anyway; the LQ violation CAM repairs a real conflict (D020).
+            wire ld_ok   = !u[g][`U_ISLOAD] || (mask[g] == 8'b0)
+                           || (SPEC_LOADS != 0);
             assign elig_br[g]  = ready && is_ctrl;
             assign elig_alu[g] = ready && !is_ctrl && !is_mem;
             assign elig_mem[g] = ready && is_mem && ld_ok;

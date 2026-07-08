@@ -41,3 +41,6 @@ sw/npu_mlp/data/
 .remember/
 obj_dir_ooo/
 obj_dir_npu/
+obj_dir_probe/
+synth/simulation/
+ruvector.db

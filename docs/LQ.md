@@ -36,18 +36,35 @@ costs IPC on pointer/list/struct code. Speculative loads let a load issue
    word-address AND byte-mask. A hit = a younger load already read a stale
    value = **memory-ordering violation**.
 
-4. **Recovery = poison + flush at head (Strategy B).** On a CAM hit, set a
-   `poison` bit on the violated load's ROB entry. Do **not** squash
-   immediately. When that load reaches the ROB head, trigger a **single full
-   pipeline flush** and refetch from the load's PC. Rationale (the decisive
-   design point): a load owns **no checkpoint** (only branches/JALR do), so
-   branch-style restore keyed on the load's tag is impossible. But **at the
-   ROB head the architectural RAT already *is* the correct recovery state**,
-   and retirement already rebuilds the freelist from `rob_old` — so Strategy B
-   needs **zero new RAT/freelist repair logic**. Livelock-free: the older
-   violating store has committed (drained) by the time the load reaches the
-   head, so the replayed load reads the correct value and cannot re-violate on
-   the same store.
+4. **Recovery = poison + flush at head (Strategy B-real).** On a CAM hit, set
+   a `poison` bit on the violated load's ROB entry. Do **not** squash
+   immediately. When that load reaches the ROB head, trigger a full pipeline
+   flush and refetch from the load's PC.
+
+   **Correction made during implementation (see D020):** the first draft
+   claimed "at the ROB head the architectural RAT *is* the recovery state, so
+   zero new repair logic." That was WRONG for this codebase — an
+   implementation-design pass against `ooo_cpu.v` proved it: there is **no
+   architectural RAT**. `rat[]` is the *speculative* map, polluted by all the
+   younger (about-to-be-flushed) uops; retirement never maintains an arch map.
+   And retirement returns freed physical regs to the freelist only
+   *incrementally* (one retire at a time via `rob_old`), so it cannot rebuild
+   the freelist for the ~31 younger uops that are discarded *without*
+   retiring. A load owns **no checkpoint** (only branches/JALR do), so
+   branch-style single-cycle restore is impossible.
+
+   **Chosen fix (Hanna): Strategy B-real — loads stay checkpoint-free.**
+   - Add an **architectural RAT** `arat[0:31]`: seeded to identity at reset,
+     updated at retire (`arat[rob_rd] <= rob_pd` on each writer retire, slot1
+     wins a same-cycle WAW). This is the committed arch→phys map.
+   - Flush-at-head is a **multi-cycle drain** (rare — fires only on a real
+     violation): freeze the front-end, copy `rat <= arat`, empty the ROB,
+     and rebuild the freelist ring so its free window lists exactly the
+     phys regs **not** in `arat[]`. A ~32-step sweep; negligible IPC cost
+     because violations are rare.
+   - Livelock-free: the older violating store has committed (drained) by the
+     time the load reaches the head, so the replayed load reads the correct
+     value and cannot re-violate on the same store.
 
 ## ISS / lockstep — NO change
 

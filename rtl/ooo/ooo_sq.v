@@ -61,6 +61,16 @@ module ooo_sq (
     input  wire        flush_en,
     input  wire [3:0]  flush_tail4,
 
+    // committed-tail tag (D020): the tag just past the last committed store.
+    // A load-ordering-violation flush rewinds the SQ tail here — all older
+    // (committed) stores survive to drain, all younger uncommitted stores die.
+    output wire [3:0]  commit_tail4,
+
+    // occupancy==0 (D020): after a violation flush the pipeline waits for the
+    // SQ to fully drain to dmem, so a re-executed load reads correct memory
+    // without depending on post-flush SQ-forward color arithmetic.
+    output wire        sq_empty,
+
     // scheduler view: valid entries whose address is still unknown
     output wire [7:0]  unknown_mask
 );
@@ -77,10 +87,12 @@ module ooo_sq (
 
     reg [3:0] head, tail, cptr;      // 4-bit counters (3 idx + phase)
     assign tail4 = tail;
+    assign commit_tail4 = cptr;      // tag just past the last committed store
 
     wire [3:0] occupancy = tail - head;
     assign free_ge1   = (occupancy < 4'd8);
     assign free_ge2   = (occupancy < 4'd7);
+    assign sq_empty   = (occupancy == 4'd0);
 
     // A store's address becomes visible to the load scheduler the same
     // cycle it executes (combinational fill bypass) — one cycle earlier
