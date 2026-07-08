@@ -281,9 +281,36 @@ chose in-order-first + minimal/stall latency + PLL/SDC):
   7× lower Fmax here (~6× slower wall-clock), until the scheduler is
   pipelined.
 
-**Next**: (1) **pipeline the OoO issue-queue select-wakeup** — the real fix
-to raise OoO Fmax so its IPC win shows on hardware (biggest project; changes
-IPC; Hanna's micro-arch); (2) speculative loads + LQ (OoO IPC headroom; no LQ
-yet — loads are conservative); (3) imem block-RAM via `ram_init_file` + the
-on-board MLP demo. Optional: merge `ooo-bram-port` (keeps a 7 MHz OoO board
-variant). Physical board bring-up is Hanna's step (both cores flashed OK).
+**2026-07-08** — branch `ooo-iq-pipeline` (pushed, NOT merged; Hanna
+overrode the hands-only rule for this work):
+- **Task 1 DONE (D019): OoO issue-queue select pipelined.** `ooo_iq.pick()`
+  rewritten from a 16-deep serial min-chain to a balanced log-depth tree
+  (bit-identical grant via lower-index tie-break) + parallel port-1 select.
+  **STA Fmax 8.42 → 19.65 MHz (2.33×), IPC bit-identical** (12/12+40/40+25/25
+  lockstep-clean; hello.c 1914/1882 unchanged). Board PLL /7→/3 = 16.67 MHz,
+  timing MET +18.9 ns, 44,422 LEs. New limiter = the wakeup path (scan gone).
+  Honest: OoO still needs ~42 MHz to tie in-order's 50 MHz — the true 2-stage
+  pipelined scheduler is the deferred next step (Hanna chose "bank 19.65").
+  Design adversarially verified before coding (naive "register the grant"
+  split rejected: it costs 1 bubble/pair).
+- **Task 2 (D020) ~95% — speculative loads + LQ, WIP, 1 bug left.** Full impl:
+  `ooo_lq.v` (8-entry LQ + store→younger-load violation CAM), `SPEC_LOADS`
+  param relaxes the conservative load gate, aRAT + `rob_poison` + multi-cycle
+  flush-at-head "Strategy B-real" recovery (a violated load owns no checkpoint
+  → `rat<=arat` + per-cycle freelist rebuild). **Happy path GREEN** (14/14
+  regress + 25/25 random lockstep; directed `sw/tests/lq_violation.S` PASSES
+  with recovery active). **OPEN: riscv-test `ld_st` fails** — a younger
+  wrong-path branch dependent on the spec load mis-redirects before the
+  violation flush completes; root cause + fix candidates in
+  **`docs/LQ_WIP_HANDOFF.md`** (read first). `SPEC_LOADS=0` → whole suite
+  green. 4 recovery bugs already fixed.
+- **Build gotcha:** Verilator builds SILENTLY FAIL without
+  `VERILATOR_ROOT=…/ucrt64/share/verilator` exported.
+
+**Next**: (1) **finish the LQ** — fix the `ld_st` wrong-path-branch bug
+(docs/LQ_WIP_HANDOFF.md), re-verify full suite + measure IPC on CoreMark +
+STA (confirm the LQ CAM didn't erode the D019 Fmax), log D020. (2) **imem
+block-RAM via `ram_init_file`** (even/odd single-port banks) + on-board MLP
+demo (Task 3, low risk). (3) Optionally split Task 1 to its own branch and
+merge (it's independent + fully verified). The deeper 2-stage pipelined
+scheduler (to actually beat in-order on HW) remains a separate future project.
