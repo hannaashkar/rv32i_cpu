@@ -32,8 +32,13 @@ Vooo_stset* top;
 uint64_t    ticks = 0;
 int         failures = 0;
 
-// TB build parameters (must match the make recipe's -G overrides)
-const int      SSIT_D    = 64;      // SSIT_AW = 6 (RTL default)
+// TB build parameters (must match the make recipe's -G overrides).
+// TB_SSIT_AW is set from the make variable STSET_AW so the SSIT=32 LE
+// escape (SSIT_AW=5) can be exercised: make stset-tb STSET_AW=5
+#ifndef TB_SSIT_AW
+#define TB_SSIT_AW 6
+#endif
+const int      SSIT_D    = 1 << TB_SSIT_AW;
 const uint32_t DECAY_MAX = 0xFF;    // DECAY_W = 8 (TB override)
 
 // golden model registers

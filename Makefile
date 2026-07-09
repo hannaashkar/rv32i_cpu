@@ -38,10 +38,11 @@ OOO_TOP     := ooo_cpu
 SIM_BIN_OOO := obj_dir_ooo/V$(OOO_TOP)
 
 # D021: OoO A/B knobs. LOAD_POLICY overrides the ooo_cpu top parameter
-# (0=conservative, 1=always-speculate/D020, 2=store-set predicted); empty =
-# the RTL default. VDEFS adds Verilog defines to the OoO build, e.g.
-# VDEFS=+define+LQ_PROBE. Both are baked into the Verilated model, so the
-# .ooo_flags_stamp below forces a rebuild when they change (mtimes don't).
+# (0=conservative, 1=always-speculate/D020, 2=store-set predicted,
+# 3=21264-style 1-bit load-wait table); empty = the RTL default. VDEFS adds
+# Verilog defines to the OoO build, e.g. VDEFS=+define+LQ_PROBE. Both are
+# baked into the Verilated model, so the .ooo_flags_stamp below forces a
+# rebuild when they change (mtimes don't).
 LOAD_POLICY ?=
 OOO_GFLAGS  := $(if $(LOAD_POLICY),-GLOAD_POLICY=$(LOAD_POLICY))
 VDEFS       ?=
@@ -128,12 +129,16 @@ npu-tb: $(NPU_TB)
 
 # --- store-set predictor unit testbench (docs/STORESET.md, D021) --------------
 # Standalone build of ooo_stset vs a C++ golden model. -GDECAY_W=8 shrinks
-# the decay epoch to 256 cycles so cyclic clearing is covered.
+# the decay epoch to 256 cycles so cyclic clearing is covered. STSET_AW=5
+# exercises the SSIT=32 LE-escape configuration (rm -rf obj_dir_stset when
+# switching — the flag is baked into the build).
+STSET_AW ?= 6
 STSET_TB := obj_dir_stset/Vooo_stset
 
 $(STSET_TB): rtl/ooo/ooo_stset.v tb/verilator/stset_tb.cpp
 	$(VERILATOR) --cc --exe --build -j 0 --top-module ooo_stset \
-	    --Mdir obj_dir_stset -Wno-fatal -GDECAY_W=8 \
+	    --Mdir obj_dir_stset -Wno-fatal -GDECAY_W=8 -GSSIT_AW=$(STSET_AW) \
+	    -CFLAGS -DTB_SSIT_AW=$(STSET_AW) \
 	    -MAKEFLAGS OPT_FAST=-O2 -MAKEFLAGS OPT_SLOW=-O2 \
 	    -MAKEFLAGS OPT_GLOBAL=-O2 -MAKEFLAGS VM_PARALLEL_BUILDS=1 \
 	    rtl/ooo/ooo_stset.v tb/verilator/stset_tb.cpp -o Vooo_stset

@@ -3,55 +3,62 @@
 # 21264-style 1-bit load-wait table (policy 3). Value-checked, so it doubles
 # as a regression under every policy; the POINT is the measured cycle gap.
 #
-# Loop body (program order): 120-add chain -> S_A (store to word A, address
-# resolves VERY late) -> 25-add chain -> S_B (store to word B, address
-# resolves moderately late) -> L_B (load from B, address ready immediately).
+# Design note (v2): the load must be LOOP-CARRIED or the gap is invisible —
+# in a 32-entry-ROB machine, in-order retirement of the long address chains
+# hides *when* a tail load issued (measured: an end-of-body load gave
+# policy 2 == policy 3 exactly). So L_B is a self-pointer chase: x6 = [x6],
+# and both address chains reseed from x6, putting L_B's issue time on the
+# critical path of every following iteration.
 #
-# Iteration 1: L_B speculates past the unresolved S_B, reads stale B, S_B
-# fills -> violation -> trains {S_B, L_B} into one store set. S_A stores to
-# a DIFFERENT word, so it never violates L_B and never joins the set. After
-# training:
-#   policy 2 (store sets):  L_B waits only for S_B          -> short stall
+# Loop body (program order):
+#   chainA (20 adds, seeded from x6) -> S_A stores junk to word A, address
+#     resolves LATE every iteration;
+#   chainB (3 adds, seeded from x6)  -> S_B stores the pointer back to
+#     word B, address resolves EARLY-ish;
+#   L_B: lw x6, 0(x6) — address ready immediately, TRAINED onto S_B by the
+#     iteration-1 violation (S_A writes a different word and never violates
+#     or joins the set).
+# After training:
+#   policy 2 (store sets):  L_B waits only for S_B          -> short iter
 #   policy 3 (1-bit table): a trained load waits for ALL older unresolved
-#                           store addresses, i.e. ALSO the slow S_A -> long
-# The cycles(policy 3) - cycles(policy 2) gap over the 10 iterations is the
-# measured value of dependence PRECISION — the Chrysos & Emer Figure-1
-# scenario reproduced on this RTL (see docs/STORESET.md / D021).
-# Fail code: 2 = load observed a wrong value. Exit: x31 -> 0x40000008.
+#     store addresses, i.e. ALSO the slow S_A               -> long iter
+# cycles(policy 3) - cycles(policy 2) over 20 iterations is the measured
+# value of dependence PRECISION — the Chrysos & Emer scenario on this RTL
+# (docs/STORESET.md / D021).
+# Fail code: 2 = pointer corrupted. Exit: x31 -> 0x40000008 (1 = PASS).
 # =============================================================================
     .section .text
     .globl _start
 _start:
-    addi x5, x0, 320            # word A
-    addi x6, x0, 360            # word B
-    addi x20, x0, 10            # iterations
-    addi x21, x0, 40            # A value seed
-    addi x22, x0, 70            # B value seed
+    addi x5, x0, 320            # word A (junk target)
+    addi x6, x0, 360            # word B — the self-pointer word
+    addi x30, x6, 0             # expected pointer value (== B)
+    sw   x6, 0(x6)              # seed memory[B] = B
+    addi x20, x0, 20            # iterations
+    addi x21, x0, 40            # junk value seed
     addi x31, x0, 2             # preload fail code
 
 loop:
     addi x21, x21, 3
-    addi x22, x22, 5
-    # S_A's address: a LONG serial chain — the last older-store address to
-    # resolve in every iteration
-    addi x10, x0, 0
-    .rept 120
+    # chainA: long, reseeded from the loop-carried x6 -> S_A's address is
+    # the LAST older-store address to resolve, every iteration
+    addi x10, x6, 0
+    .rept 20
     addi x10, x10, 1
     .endr
-    sub  x11, x10, x10
-    add  x12, x5, x11           # == x5 (word A), very late
-    sw   x21, 0(x12)            # S_A — never conflicts with L_B
-    # S_B's address: a SHORT chain dispatched just before S_B, late enough
-    # that the untrained L_B beats its fill (the training violation)
-    addi x13, x0, 0
-    .rept 25
+    sub  x11, x10, x10          # 0, late
+    add  x12, x5, x11           # word A, resolves late
+    sw   x21, 0(x12)            # S_A — older, slow, unrelated word
+    # chainB: short, also reseeded from x6 -> S_B resolves much earlier
+    addi x13, x6, 0
+    .rept 3
     addi x13, x13, 1
     .endr
-    sub  x14, x13, x13
-    add  x15, x6, x14           # == x6 (word B), moderately late
-    sw   x22, 0(x15)            # S_B — L_B's true producer
-    lw   x9,  0(x6)             # L_B — trained onto S_B after iteration 1
-    bne  x9, x22, finish        # must observe THIS iteration's B value
+    sub  x14, x13, x13          # 0, slightly late
+    add  x15, x6, x14           # word B, resolves early-ish
+    sw   x6, 0(x15)             # S_B — the true producer (stores the pointer)
+    lw   x6, 0(x6)              # L_B — loop-carried self-pointer chase
+    bne  x6, x30, finish        # the pointer must remain B
     addi x20, x20, -1
     bne  x20, x0, loop
 

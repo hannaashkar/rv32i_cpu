@@ -126,19 +126,37 @@ residual wedge into an immediate sim failure.
 
 ## Measured results (D021; full table + method in DECISIONS.md)
 
-| build | hello.c cycles | violations | CoreMark IPC |
-|---|---|---|---|
-| 0 conservative | 1921 | 0 | 1.006 |
-| 1 speculative (D020) | 2613 | 15 | 1.026 |
-| **2 store sets** | **1989** | **1** | *(D021 table)* |
-| 3 21264 1-bit | *(D021 table)* | *(D021 table)* | — |
+| build | hello.c cycles | violations | stset_precise | CoreMark IPC |
+|---|---|---|---|---|
+| 0 conservative | 1921 | 0 | 618 | 1.006 |
+| 1 speculative (D020) | 2613 | 15 | 2149 | 1.026 |
+| **2 store sets** | **1989** | **1** | **609** | **1.026** |
+| 3 21264 1-bit | 1989 | — | 698 | — |
 
 hello.c recovers **90% of the D020 regression** (2613 → 1989 vs the 1921
 floor); the 68-cycle residual is one irreducible training flush + the
-trained loads' short waits, and it amortizes to zero on longer programs.
-`ld_st` drops 49 → 31 violations (its remaining sites are single-shot —
-distinct static PCs — which no PC-indexed predictor can help; same reason
-the --vio suite keeps its full coverage).
+trained loads' short waits, and it amortizes to zero on longer programs —
+CoreMark proves it: policy 2 keeps the full D020 speculation win (IPC
+1.026, 421.77M cycles, official CRCs). On the loop-carried pointer-chase
+microbench, store sets is the fastest of all four configs: 3.5× vs
+always-speculate, −12.7% vs the 21264-style 1-bit table, and it even edges
+conservative (609 vs 618) because the trained load waits on one store
+instead of all older unresolved addresses. `ld_st` drops 49 → 31 violations
+(its remaining sites are single-shot — distinct static PCs — which no
+PC-indexed predictor can help; same reason the --vio suite keeps its full
+coverage).
+
+## Timing/area (measured, bare-`ooo_cpu` STA — full numbers in D021)
+
+The design-time claim above ("touches neither the rename/ok cone nor the IQ
+wakeup path") was confirmed by STA on the seed-3 characterization fit:
+lookup chain **19.2 ns** (positive slack at 20 ns; ~50 MHz-capable), worst
+path into any predictor register 41.9 ns, critical path of the whole core
+50.7 ns (Fmax 19.55 MHz) with **zero predictor nodes on it** (it's the
+pre-existing dmem-load→bypass→JALR→BTB path, 80% routing delay at 97%
+utilization). Area: net +64 LEs / +160 registers vs the D020 fit; 4 of 5
+fit attempts failed at the device's 96-97% capacity cliff (seed luck — an
+SSIT=32 trial ALSO failed, proving predictor size doesn't decide the fit).
 
 ## Sizing rationale (defensible defaults, LE escapes pre-analyzed)
 
