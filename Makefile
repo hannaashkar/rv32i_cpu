@@ -37,6 +37,15 @@ SIM_BIN   := obj_dir/V$(TOP)
 OOO_TOP     := ooo_cpu
 SIM_BIN_OOO := obj_dir_ooo/V$(OOO_TOP)
 
+# D021: OoO A/B knobs. LOAD_POLICY overrides the ooo_cpu top parameter
+# (0=conservative, 1=always-speculate/D020, 2=store-set predicted); empty =
+# the RTL default. VDEFS adds Verilog defines to the OoO build, e.g.
+# VDEFS=+define+LQ_PROBE. Both are baked into the Verilated model, so the
+# .ooo_flags_stamp below forces a rebuild when they change (mtimes don't).
+LOAD_POLICY ?=
+OOO_GFLAGS  := $(if $(LOAD_POLICY),-GLOAD_POLICY=$(LOAD_POLICY))
+VDEFS       ?=
+
 # Verilator flags:
 #   --trace-fst   compile-in FST tracing (enabled at runtime with +trace)
 #   -Wno-fatal    legacy code trips WIDTH/style warnings; keep them visible
@@ -90,9 +99,15 @@ $(SIM_BIN): $(RTL_SRCS) $(SIM_MAIN) tb/verilator/iss.h
 
 sim-ooo: $(SIM_BIN_OOO)
 
-$(SIM_BIN_OOO): $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) tb/verilator/iss.h
-	$(VERILATOR) $(VFLAGS) --top-module $(OOO_TOP) --Mdir obj_dir_ooo \
-	    -CFLAGS -DOOO_TOP \
+obj_dir_ooo/.ooo_flags_stamp: FORCE
+	@mkdir -p obj_dir_ooo
+	@echo '$(LOAD_POLICY) $(VDEFS)' | cmp -s - $@ 2>/dev/null \
+	    || echo '$(LOAD_POLICY) $(VDEFS)' > $@
+
+$(SIM_BIN_OOO): $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) tb/verilator/iss.h \
+                obj_dir_ooo/.ooo_flags_stamp
+	$(VERILATOR) $(VFLAGS) $(VDEFS) --top-module $(OOO_TOP) --Mdir obj_dir_ooo \
+	    $(OOO_GFLAGS) -CFLAGS -DOOO_TOP \
 	    $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) -o V$(OOO_TOP)
 
 # --- NPU unit testbench (docs/NPU.md) -----------------------------------------
@@ -110,6 +125,22 @@ $(NPU_TB): $(NPU_SRCS) tb/verilator/npu_tb.cpp
 npu-tb: $(NPU_TB)
 	./$(NPU_TB)
 .PHONY: npu-tb
+
+# --- store-set predictor unit testbench (docs/STORESET.md, D021) --------------
+# Standalone build of ooo_stset vs a C++ golden model. -GDECAY_W=8 shrinks
+# the decay epoch to 256 cycles so cyclic clearing is covered.
+STSET_TB := obj_dir_stset/Vooo_stset
+
+$(STSET_TB): rtl/ooo/ooo_stset.v tb/verilator/stset_tb.cpp
+	$(VERILATOR) --cc --exe --build -j 0 --top-module ooo_stset \
+	    --Mdir obj_dir_stset -Wno-fatal -GDECAY_W=8 \
+	    -MAKEFLAGS OPT_FAST=-O2 -MAKEFLAGS OPT_SLOW=-O2 \
+	    -MAKEFLAGS OPT_GLOBAL=-O2 -MAKEFLAGS VM_PARALLEL_BUILDS=1 \
+	    rtl/ooo/ooo_stset.v tb/verilator/stset_tb.cpp -o Vooo_stset
+
+stset-tb: $(STSET_TB)
+	./$(STSET_TB)
+.PHONY: stset-tb
 
 # --- software build ------------------------------------------------------------
 sw: $(SW_TESTS)
@@ -345,7 +376,7 @@ synth-check:
 	cd synth && $(QUARTUS_MAP) rv32i_cpu
 
 clean:
-	rm -rf obj_dir obj_dir_ooo obj_dir_npu sim.fst
+	rm -rf obj_dir obj_dir_ooo obj_dir_npu obj_dir_stset sim.fst
 	rm -f sw/tests/*.elf sw/tests/*.bin sw/tests/*.hex
 	rm -f sw/ctests/*.elf sw/ctests/*.bin sw/ctests/*.hex
 	rm -f sw/coremark/coremark.elf sw/coremark/*.bin sw/coremark/*.hex

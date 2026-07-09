@@ -113,6 +113,7 @@ set_global_assignment -name VERILOG_FILE ../rtl/ooo/ooo_prf.v
 set_global_assignment -name VERILOG_FILE ../rtl/ooo/ooo_iq.v
 set_global_assignment -name VERILOG_FILE ../rtl/ooo/ooo_sq.v
 set_global_assignment -name VERILOG_FILE ../rtl/ooo/ooo_lq.v
+set_global_assignment -name VERILOG_FILE ../rtl/ooo/ooo_stset.v
 set_global_assignment -name VERILOG_FILE ../rtl/ooo/ooo_cpu.v
 # 4x4 int8 systolic NPU (D014), instantiated by BOTH cores at 0x5xxxxxxx
 set_global_assignment -name VERILOG_FILE ../rtl/npu/npu_pe.v
