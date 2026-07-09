@@ -15,7 +15,18 @@
 // ============================================================================
 `include "ooo_uop.vh"
 
-module ooo_cpu (
+module ooo_cpu #(
+    // D021 load-speculation policy (constant-folded per build; Verilator
+    // A/B override via -GLOAD_POLICY=<n>, see Makefile):
+    //   0 = conservative — a load waits until every older store address is
+    //       known (D020 SPEC_LOADS=0, cycle-identical)
+    //   1 = always-speculate — loads never wait; the LQ violation CAM +
+    //       flush-at-head repair real conflicts (D020 SPEC_LOADS=1,
+    //       cycle-identical)
+    //   2 = store-set predicted (Chrysos & Emer, docs/STORESET.md) — a load
+    //       that has violated waits for its predicted producer store only
+    parameter LOAD_POLICY = 1
+) (
     input  wire clk,
     input  wire reset,
     output wire [9:0] leds,
@@ -501,6 +512,24 @@ module ooo_cpu (
     wire [7:0] mask1  = sq_unknown | ((dr_st0 && ok0) ? (8'b1 << sq_pos0)
                                                       : 8'b0);
 
+    // D021: per-uop dispatch wait masks by load-speculation policy. pred0/1
+    // are the store-set predictor's one-hot "wait for this SQ slot" hints
+    // (0 = no prediction / speculate). ANDing them with the conservative
+    // mask0/mask1 is the safety bracket — a stale prediction either names an
+    // older still-unknown store (a legal, bounded wait) or is masked to 0
+    // (speculate; the LQ CAM repairs a real conflict). Predicted STORES wait
+    // too (in-set store->store ordering makes "wait for the last fetched
+    // store of the set" transitive). LOAD_POLICY is a parameter: each arm
+    // constant-folds; policies 0/1 synthesize to the exact D020 netlists.
+    wire [7:0] pred0 = 8'b0;      // store-set predictor hints (Inc 2)
+    wire [7:0] pred1 = 8'b0;
+    wire [7:0] dmask0 = (LOAD_POLICY == 0) ? (dr_ld0 ? mask0 : 8'b0)
+                      : (LOAD_POLICY == 1) ? 8'b0
+                      : ((dr_ld0 | dr_st0) ? (pred0 & mask0) : 8'b0);
+    wire [7:0] dmask1 = (LOAD_POLICY == 0) ? (dr_ld1 ? mask1 : 8'b0)
+                      : (LOAD_POLICY == 1) ? 8'b0
+                      : ((dr_ld1 | dr_st1) ? (pred1 & mask1) : 8'b0);
+
     // uop assembly
     function [`UOPW-1:0] mkuop;
         input [3:0]  actl;
@@ -939,9 +968,9 @@ module ooo_cpu (
         .clk(clk), .reset(reset),
         .head_tag(head_tag),
         .disp0_en(ok0), .disp0_uop(uop0),
-        .disp0_r1(r1_0), .disp0_r2(r2_0), .disp0_mask(dr_ld0 ? mask0 : 8'b0),
+        .disp0_r1(r1_0), .disp0_r2(r2_0), .disp0_mask(dmask0),
         .disp1_en(ok1), .disp1_uop(uop1),
-        .disp1_r1(r1_1), .disp1_r2(r2_1), .disp1_mask(dr_ld1 ? mask1 : 8'b0),
+        .disp1_r1(r1_1), .disp1_r2(r2_1), .disp1_mask(dmask1),
         .free_ge1(iq_ge1), .free_ge2(iq_ge2),
         .sq_unknown(sq_unknown),
         .wkl_en(wb_v2_isload_wr), .wkl_tag(wb_pd2_r),
