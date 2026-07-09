@@ -72,7 +72,12 @@ module ooo_sq (
     output wire        sq_empty,
 
     // scheduler view: valid entries whose address is still unknown
-    output wire [7:0]  unknown_mask
+    output wire [7:0]  unknown_mask,
+
+    // raw view (no same-cycle fill bypass) — consumed ONLY by the
+    // simulation-side wait-mask invariant check in ooo_iq (D021, INV-P5);
+    // dead logic in synthesis
+    output wire [7:0]  unknown_raw
 );
 
 `include "ooo_pkg.vh"
@@ -102,6 +107,7 @@ module ooo_sq (
         for (g = 0; g < SQD; g = g + 1) begin : UM
             assign unknown_mask[g] = v[g] && !known[g]
                                      && !(fill_en && (fill_pos == g[2:0]));
+            assign unknown_raw[g]  = v[g] && !known[g];
         end
     endgenerate
 

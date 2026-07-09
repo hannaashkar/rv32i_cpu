@@ -47,6 +47,9 @@ module ooo_iq (
 
     // SQ current unknown-address mask (valid & ~addr_known)
     input  wire [7:0]        sq_unknown,
+    // raw variant without the same-cycle fill bypass — consumed ONLY by
+    // the simulation invariant check at the bottom; unused in synthesis
+    input  wire [7:0]        sq_unknown_raw,
 
     // load writeback tag broadcast (external wakeup)
     input  wire              wkl_en,
@@ -336,5 +339,23 @@ module ooo_iq (
             end
         end
     end
+
+`ifdef VERILATOR
+    // D021 INV-P5/P9: every resident wait-mask bit must denote a LIVE,
+    // still-unknown SQ slot — the strictly-older continuous-occupant
+    // property the mask-deadlock-freedom proof rests on (a bit pointing at
+    // a dead or reused slot would be the B013 class of residual-state
+    // bug). And only mem ops may carry wait masks.
+    integer ak;
+    always @(posedge clk) if (!reset) begin
+        for (ak = 0; ak < IQD; ak = ak + 1) begin
+            if (v[ak] && ((mask[ak] & ~sq_unknown_raw) != 8'b0))
+                $fatal(1, "ooo_iq: wait-mask bit on a dead/known SQ slot");
+            if (v[ak] && (mask[ak] != 8'b0)
+                && !(u[ak][`U_ISLOAD] || u[ak][`U_ISSTORE]))
+                $fatal(1, "ooo_iq: wait mask on a non-mem uop");
+        end
+    end
+`endif
 
 endmodule

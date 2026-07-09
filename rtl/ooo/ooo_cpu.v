@@ -25,7 +25,10 @@ module ooo_cpu #(
     //       cycle-identical)
     //   2 = store-set predicted (Chrysos & Emer, docs/STORESET.md) — a load
     //       that has violated waits for its predicted producer store only
-    parameter LOAD_POLICY = 1
+    //   3 = 1-bit load-wait table (Alpha 21264 stWait style, measured for
+    //       comparison) — a load that has violated waits for ALL older
+    //       unresolved store addresses (the conservative mask)
+    parameter LOAD_POLICY = 2
 ) (
     input  wire clk,
     input  wire reset,
@@ -434,6 +437,7 @@ module ooo_cpu #(
     wire       sq_ge1, sq_ge2;
     wire [3:0] sq_tail4;
     wire [7:0] sq_unknown;
+    wire [7:0] sq_unknown_raw;   // sim-only invariant view (D021)
     wire [2:0] sq_pos0 = sq_tail4[2:0];
     wire [2:0] sq_pos1 = sq_tail4[2:0] + {2'b0, dr_st0};
 
@@ -521,13 +525,22 @@ module ooo_cpu #(
     // too (in-set store->store ordering makes "wait for the last fetched
     // store of the set" transitive). LOAD_POLICY is a parameter: each arm
     // constant-folds; policies 0/1 synthesize to the exact D020 netlists.
-    wire [7:0] pred0 = 8'b0;      // store-set predictor hints (Inc 2)
-    wire [7:0] pred1 = 8'b0;
+    // store-set hint wires — driven by the STSET generate block below
+    // (tied off under policies 0/1, so those netlists are exactly D020's)
+    wire       ss_v0, ss_v1, sf_v0, sf_v1;
+    wire [3:0] ss_id0, ss_id1;
+    wire [2:0] sf_pos0, sf_pos1;
+    wire [7:0] pred0 = (ss_v0 && sf_v0) ? (8'b1 << sf_pos0) : 8'b0;
+    wire [7:0] pred1 = (ss_v1 && sf_v1) ? (8'b1 << sf_pos1) : 8'b0;
     wire [7:0] dmask0 = (LOAD_POLICY == 0) ? (dr_ld0 ? mask0 : 8'b0)
                       : (LOAD_POLICY == 1) ? 8'b0
+                      : (LOAD_POLICY == 3) ? ((dr_ld0 && ss_v0) ? mask0
+                                                                : 8'b0)
                       : ((dr_ld0 | dr_st0) ? (pred0 & mask0) : 8'b0);
     wire [7:0] dmask1 = (LOAD_POLICY == 0) ? (dr_ld1 ? mask1 : 8'b0)
                       : (LOAD_POLICY == 1) ? 8'b0
+                      : (LOAD_POLICY == 3) ? ((dr_ld1 && ss_v1) ? mask1
+                                                                : 8'b0)
                       : ((dr_ld1 | dr_st1) ? (pred1 & mask1) : 8'b0);
 
     // uop assembly
@@ -797,7 +810,8 @@ module ooo_cpu #(
                                     : chk_sqt[restore_chk[2:0]]),
         .commit_tail4(sq_commit_tail4),
         .sq_empty(sq_empty),
-        .unknown_mask(sq_unknown)
+        .unknown_mask(sq_unknown),
+        .unknown_raw(sq_unknown_raw)
     );
 
     // ------------------------------------------------------------------
@@ -866,6 +880,97 @@ module ooo_cpu #(
             $display("[LQ] FLUSH pc=%h", rob_pc[h0]);
     end
 `endif
+
+    // ------------------------------------------------------------------
+    // Store-set memory-dependence predictor (D021, docs/STORESET.md).
+    // Instantiated only under the predicted policies (2 = store sets,
+    // 3 = 21264-style 1-bit load-wait, which reuses the SSIT valid bit and
+    // ignores the LFST); policies 0/1 tie the hint wires off so their
+    // netlists are exactly D020's.
+    // ------------------------------------------------------------------
+    generate if (LOAD_POLICY == 2 || LOAD_POLICY == 3) begin : STSET
+        // Training, phase 1 (capture): register the violated pair at the
+        // cycle the LQ CAM fires, gated EXACTLY like the poison write
+        // below — a violation whose load is squashed by a same-cycle
+        // branch restore is wrong-path and must not train. Phase 2
+        // (apply) runs next cycle: the rob_pc 32:1 read + SSIT merge are
+        // FF-to-FF in their own cycle, so NOTHING is appended after the
+        // violation CAM (the D020 critical path). The poisoned ROB entry
+        // cannot be reallocated before its flush-at-head fires, so
+        // rob_pc[tag] is stable across the capture->apply boundary.
+        reg        sst_train_v;
+        reg  [4:0] sst_train_tag;
+        reg  [5:0] sst_train_stpc;
+        wire [31:0] sst_stpc_full = ex_u[2][`U_PC];
+        always @(posedge clk or posedge reset) begin
+            if (reset) begin
+                sst_train_v    <= 1'b0;
+                sst_train_tag  <= 5'b0;
+                sst_train_stpc <= 6'b0;
+            end else begin
+                // !lq_flush_start: a CAM hit in the exact cycle a
+                // flush-at-head starts must NOT train — the flush clears
+                // every rob_v at this edge, so the N+1 apply would read a
+                // dead ROB entry (B014, caught by the INV-P7 assertion on
+                // riscv-test ld_st). The dropped event is a genuine pair
+                // that simply retrains on its next violation.
+                sst_train_v    <= lq_vio_en
+                                  && !(restore_en
+                                       && is_younger(lq_vio_tag, restore_tag))
+                                  && !lq_flushing && !lq_flush_start;
+                sst_train_tag  <= lq_vio_tag[4:0];
+                sst_train_stpc <= sst_stpc_full[7:2];
+            end
+        end
+        wire [31:0] sst_ldpc_full = rob_pc[sst_train_tag];
+        wire        sst_busy_unused;
+
+        ooo_stset SST0 (
+            .clk(clk), .reset(reset),
+            .lk_pc0(dr_pc0[7:2]),
+            .lk_ssv0(ss_v0), .lk_ssid0(ss_id0),
+            .lk_pc1(dr_pc1[7:2]),
+            .lk_ssv1(ss_v1), .lk_ssid1(ss_id1),
+            .lf_v0(sf_v0), .lf_pos0(sf_pos0),
+            .lf_v1(sf_v1), .lf_pos1(sf_pos1),
+            // dispatching stores update their set's last-fetched entry
+            .stw0_en(ok0 && dr_st0 && ss_v0),
+            .stw0_ssid(ss_id0), .stw0_sqpos(sq_pos0),
+            .stw1_en(ok1 && dr_st1 && ss_v1),
+            .stw1_ssid(ss_id1), .stw1_sqpos(sq_pos1),
+            .train_en(sst_train_v),
+            .train_ldpc(sst_ldpc_full[7:2]),
+            .train_stpc(sst_train_stpc),
+            // the hijacked-cycle blackout is internal (lk_ssv* forced 0)
+            .train_busy(sst_busy_unused)
+        );
+
+`ifdef STSET_PROBE
+        // opt-in predictor trace (+define+STSET_PROBE), LQ_PROBE style
+        always @(posedge clk) if (!reset) begin
+            if (sst_train_v)
+                $display("[STSET] TRAIN ld_pc6=%h st_pc6=%h",
+                         sst_ldpc_full[7:2], sst_train_stpc);
+            if (ok0 && (dr_ld0 || dr_st0) && (dmask0 != 8'b0))
+                $display("[STSET] WAIT pc=%h mask=%b", dr_pc0, dmask0);
+            if (ok1 && (dr_ld1 || dr_st1) && (dmask1 != 8'b0))
+                $display("[STSET] WAIT pc=%h mask=%b", dr_pc1, dmask1);
+        end
+`endif
+
+`ifdef VERILATOR
+        // INV-P7: the training apply must read a live ROB entry
+        always @(posedge clk) if (!reset) begin
+            if (sst_train_v && !rob_v[sst_train_tag])
+                $fatal(1, "ooo_cpu: stset training reads a dead ROB entry");
+        end
+`endif
+    end else begin : NOSTSET
+        assign ss_v0 = 1'b0;   assign ss_v1 = 1'b0;
+        assign ss_id0 = 4'b0;  assign ss_id1 = 4'b0;
+        assign sf_v0 = 1'b0;   assign sf_v1 = 1'b0;
+        assign sf_pos0 = 3'b0; assign sf_pos1 = 3'b0;
+    end endgenerate
 
     // memory write routing (SQ drain -> dmem, mmio or npu). The drain
     // fires only when the target accepts: a busy NPU backpressures via
@@ -959,6 +1064,44 @@ module ooo_cpu #(
     always @(posedge clk)
         if (!reset && p2_load && p2_io_any && !p2_replay && sq_qhit)
             $fatal(1, "ooo_cpu: IO load completed with an SQ forward hit");
+
+    // D021 predictor invariants (docs/STORESET.md INV-P1..P3). The subset
+    // property IS the architectural-safety argument (every dispatch mask
+    // lies between the verified speculative and conservative extremes) —
+    // check it on every dispatch, under every policy.
+    always @(posedge clk) if (!reset) begin
+        if (ok0 && ((dmask0 & ~mask0) != 8'b0))
+            $fatal(1, "ooo_cpu: slot0 mask not a subset of conservative");
+        if (ok1 && ((dmask1 & ~mask1) != 8'b0))
+            $fatal(1, "ooo_cpu: slot1 mask not a subset of conservative");
+        if (LOAD_POLICY == 2 && ok0
+            && ((dmask0 & (dmask0 - 8'd1)) != 8'b0))
+            $fatal(1, "ooo_cpu: slot0 predicted mask not one-hot");
+        if (LOAD_POLICY == 2 && ok1
+            && ((dmask1 & (dmask1 - 8'd1)) != 8'b0))
+            $fatal(1, "ooo_cpu: slot1 predicted mask not one-hot");
+        if (ok0 && dr_st0 && dmask0[sq_pos0])
+            $fatal(1, "ooo_cpu: slot0 store waits on itself");
+        if (ok1 && dr_st1 && dmask1[sq_pos1])
+            $fatal(1, "ooo_cpu: slot1 store waits on itself");
+    end
+
+    // ROB-head forward-progress watchdog: a wait-mask deadlock (or any
+    // other head wedge) trips this within one sim run. 2048 cycles is far
+    // beyond any legitimate stall (NPU busy ~10s of cycles, SQ drain <=8).
+    reg [11:0] wd_cnt;
+    reg [5:0]  wd_head;
+    always @(posedge clk) begin
+        if (reset || rob_empty || (head_tag != wd_head)
+            || rob_done[h0] || lq_flushing) begin
+            wd_head <= head_tag;
+            wd_cnt  <= 12'd0;
+        end else begin
+            wd_cnt <= wd_cnt + 12'd1;
+            if (wd_cnt > 12'd2048)
+                $fatal(1, "ooo_cpu: ROB head stalled >2048 cycles");
+        end
+    end
 `endif
 
     // =====================================================================
@@ -972,7 +1115,7 @@ module ooo_cpu #(
         .disp1_en(ok1), .disp1_uop(uop1),
         .disp1_r1(r1_1), .disp1_r2(r2_1), .disp1_mask(dmask1),
         .free_ge1(iq_ge1), .free_ge2(iq_ge2),
-        .sq_unknown(sq_unknown),
+        .sq_unknown(sq_unknown), .sq_unknown_raw(sq_unknown_raw),
         .wkl_en(wb_v2_isload_wr), .wkl_tag(wb_pd2_r),
         .rep_en(p2_replay), .rep_tag(ex_u[2][`U_TAG]),
         .ldone_en(ex_v[2] && ex_u[2][`U_ISLOAD] && !p2_replay),
