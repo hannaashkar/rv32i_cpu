@@ -5,6 +5,124 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D021 — 2026-07-09 — Store-set memory-dependence predictor (Chrysos & Emer); hello.c 2613 → 1989 cyc (90% of the D020 regression recovered), CoreMark IPC 1.026 kept
+
+**Context:** D020 left an open call — speculation's net effect is governed by
+violation frequency because the flush-at-head recovery is a ~46-cycle drain:
+CoreMark +2.0% (violations ≈ 0) but hello.c −36% (15 stack-spill violations;
+**2613 − 1921 = 692 ≈ 15 × 46**, the drains explain the entire gap). Hanna
+chose the industry-standard fix (option c): a **memory-dependence predictor**
+that stops re-speculating a load once it has violated. Design validated
+pre-implementation by the same 3-way adversarial analysis used for D019/D020
+(correctness / fidelity-IPC / implementation-timing); `docs/STORESET.md` is
+the binding spec.
+
+**What was chosen and why (options weighed in the analysis):** full **store
+sets** (Chrysos & Emer, ISCA 1998 — the Alpha 21464-lineage mechanism) over
+(a) the Alpha 21264 1-bit `stWait` table and (b) Intel-style per-load
+counters+watchdog. The deciding insight: the IQ already carries a per-entry
+older-store wait mask decayed by `sq_unknown`, so ANY of these predictors
+reduces to a **dispatch-time mask policy** — store sets costs only the
+SSIT+LFST tables beyond the 1-bit variant, and the 1-bit variant then falls
+out as a ~10-line degenerate config. Both were built and MEASURED
+(`LOAD_POLICY` parameter: 0=conservative, 1=always-speculate — both
+verified cycle-identical to D020 — 2=store sets [default], 3=21264 1-bit).
+Counters+watchdog was rejected: needs SQ-forward outcome feedback that
+doesn't exist, for per-load binary precision the 1-bit table already gives.
+
+**Mechanism (rtl/ooo/ooo_stset.v + dispatch integration; docs/STORESET.md):**
+SSIT 64×{v,ssid[3:0]} on pc[7:2], LFST 16×{v,sqpos[2:0]} = SQ slot of the
+set's last dispatched store (slot-not-inum: `sq_unknown` then implements
+both the wait and the paper's invalidate-at-store-execute for free);
+predicted masks are `onehot(LFST) & mask_full` — the AND against the
+conservative mask is **INV-P1, the safety bracket**: every wait lies between
+the two verified D020 extremes, LQ CAM + flush-at-head repair any
+under-wait, tables are pure hints (never checkpointed, lockstep-invisible).
+Predicted stores wait too (in-set store→store ordering — required: an
+older-slow/younger-fast same-set store pair otherwise livelocks a load into
+re-violating every iteration). Same-cycle slot0-store→slot1 LFST bypass
+covers co-dispatched `sw/lw` spill pairs. Training is 2-phase (capture at
+the CAM hit with the poison write's wrong-path gates, apply next cycle via
+`rob_pc[tag]`, borrowing the SSIT lookup ports for that one cycle) so
+**zero logic lands after the LQ CAM** — the D020 critical path. Cyclic decay
+every 2^16 cycles.
+
+**Bug found+fixed on the way (B014):** a CAM hit in the exact
+`lq_flush_start` cycle trained against a ROB entry the flush cleared at that
+same edge — caught by the INV-P7 assertion (training-reads-live-ROB-entry)
+on riscv-test `ld_st` in one regression run, zero debugging. Fix: the
+capture gate needs `!lq_flush_start` (restore_en can't cover it — branch
+mispredicts are suppressed during a violation flush). The
+assertions-with-the-feature methodology paid for itself immediately; see
+BUGLOG B014.
+
+**Result — the 4-policy measured table (all lockstep-clean):**
+
+| build | hello.c cyc | hello vio | stset_precise (20-iter ptr chase) | CoreMark IPC |
+|---|---|---|---|---|
+| 0 conservative | 1921 | 0 | 618 | 1.006 (D020) |
+| 1 speculative | 2613 | 15 | 2149 | 1.026 (D020) |
+| **2 store sets** | **1989** | **1** | **609** | **1.026** (421.77M cyc, CRCs official) |
+| 3 21264 1-bit | 1989 | — | 698 | — |
+
+hello.c recovers **90%** of the regression (residual 68 cyc = one
+irreducible training flush + short trained waits; amortizes to ~0 on long
+programs — CoreMark proves it: the FULL +2.0% is kept). `ld_st` violations
+49 → 31 (the rest are single-shot static sites no PC-indexed predictor can
+help — same reason the `--vio` random suite keeps its full recovery
+coverage, by construction). **Honesty on policy 2 vs 3:** on hello.c they
+tie (both eliminate re-speculation; conservative waits there cost ~nothing —
+the 692=15×46 arithmetic predicted exactly this). The store-set *precision*
+shows where an unrelated slow-address older store coexists with a trained
+load: the loop-carried pointer-chase microbench (`stset_precise.S`) measures
+**609 vs 698 (−12.7%)**, and store sets even beats conservative (618) —
+first-cut caveat: an earlier non-loop-carried version of the microbench
+measured 2==3 exactly because in-order retirement hid the load's issue time;
+the redesign note is in the test header.
+
+**Result — verification:** unit TB (golden-model, 200k random cycles + all
+merge/bypass/decay/alias directed cases) clean; OoO **17/17** directed
+(3 new suites: `stset_predict.S` violate-then-retrain 6→1 violations,
+`stset_pair.S` co-dispatch bypass + in-set chain + stale-LFST self-heal,
+`stset_precise.S`) + **40/40** riscv-tests + **25/25** random + **25/25**
+`--vio`, all lockstep-clean with new invariant assertions armed (mask-subset,
+one-hot, no-self-wait, mask⊆live-unknown-slots via a debug-only
+`unknown_raw` port, training-liveness, ROB-head watchdog); policies 0/1/3
+spot-regressed 17/17; in-order untouched (17/17 + 40/40 + 25/25);
+`quartus_map` 0 errors / 43 warnings (unchanged count).
+
+**Result — Fmax/LE (bare-`ooo_cpu` STA, D019/D020 method):** the
+characterization device is now **capacity-saturated**: 4 of 5 fit attempts
+failed to place at all (seed 1, seed 2, an SSIT=32 trial, a minimize-area
+register-packing trial — every one "Can't fit" at 96% LEs), and the
+surviving fit (seed 3) closed at **48,302 / 49,760 LEs (97%)** — net
+**+64 LEs / +160 registers vs D020's 48,238** (fitter packing absorbs most
+of the predictor's ~400 FFs of table state). **The predictor is NOT on the
+critical path**: its full lookup chain (SSIT read → LFST → onehot → mask
+AND → IQ mask flop) is **19.2 ns** (~50 MHz-capable, positive slack at the
+20 ns constraint), the worst path touching any predictor register is
+41.9 ns, and the design's actual critical path — **50.7 ns = Fmax
+19.55 MHz** — contains zero predictor nodes (dmem sync-read load data →
+result bypass → JALR target → BTB target write in `gshare_bp`, a path shape
+present since the D018 BRAM port; 80% of it is routing: 40.4 ns
+interconnect vs 10.0 ns cell over 24 logic levels). The drop vs D020's
+26.32 MHz is **fit-luck at the 97% cliff** (routing congestion), not
+predictor logic — and the SSIT=32 trial proved table size doesn't decide
+the fit (saved ~390 mapped LEs, still failed), so the pre-analyzed escape
+(`SSIT_AW=5`, unit-tested via `make stset-tb STSET_AW=5`) does not ship.
+**Board-project finding (new information, PRE-EXISTING condition):** a full
+compile of `synth/rv32i_cpu.qpf` (`de10_top`) surfaced that the board top
+**no longer fits the 10M50 at all** — and a control map of predictor-free
+`main` proves it predates this branch: main maps to **51,225 LEs (103% of
+49,760)**; with the predictor, 53,075 (107%). The D020 merge gate was
+`quartus_map` *error-count* only, which does not catch capacity overflow —
+the board has been over capacity since the LQ landed (last successful board
+fit was D019's 44,422 LEs). The fix is the already-roadmapped Task 3:
+**imem → M9K block RAM via `ram_init_file`**, which frees the ~4-5k LEs the
+4 KB logic-ROM imem burns and is now *required* (not just the MLP-demo
+enabler) for any board bitstream. Until then the board `.sof` cannot be
+rebuilt from main — with or without this branch.
+
 ## D020 — 2026-07-08 — Speculative loads + load queue (LQ) with poison + flush-at-head recovery; CoreMark IPC 1.006 → 1.026 (+2.0%)
 
 **Context:** Before this, OoO loads were **conservative** — a load issued only

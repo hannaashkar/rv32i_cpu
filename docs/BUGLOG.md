@@ -7,6 +7,31 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
 
 ---
 
+## B014 — store-set training captured a violation in the flush-at-head start cycle, then read a dead ROB entry — FIXED (2026-07-09)
+
+- **Symptom:** with the D021 store-set predictor integrated (`LOAD_POLICY=2`),
+  the riscv-test `ld_st` died on the new INV-P7 assertion:
+  `"stset training reads a dead ROB entry"` (39/40 suites still green — this
+  needs a violation CAM hit in one exact cycle).
+- **Root cause:** predictor training is 2-phase (capture the violated pair's
+  tag/PCs at the CAM-hit cycle N, apply the SSIT merge at N+1 via a
+  `rob_pc[tag]` read — deliberately, so nothing is appended after the LQ CAM,
+  the D020 critical path). The capture gate copied the poison write's
+  wrong-path suppression (`restore_en && is_younger`) and blocked the drain
+  (`!lq_flushing`) — but not `lq_flush_start` itself. When a store fills and
+  CAM-hits some executed load **in the same cycle a poisoned load at the ROB
+  head starts its flush**, the flush clears *every* `rob_v` at that edge, so
+  the N+1 apply indexes a dead entry. `restore_en` can never cover this case:
+  branch mispredicts are architecturally suppressed while a violation flush
+  starts, which is exactly why the co-incident cycle needs its own gate term.
+- **How caught:** the INV-P7 Verilator assertion added *with* the feature
+  (docs/STORESET.md invariants) — one regression run, zero debugging. The
+  assertion methodology paid for itself on its first outing.
+- **Fix:** add `!lq_flush_start` to the capture gate. The dropped event is a
+  genuine dependence pair that simply retrains on its next violation
+  (hint-only state, bounded cost); `ld_st` and the full suites pass, and the
+  strict INV-P7 assertion stays enforced rather than being weakened.
+
 ## B013 — OoO load-violation flush-at-head does not clear the issue queue (stale IQ entries re-issue) — FIXED (2026-07-08)
 
 - **Symptom:** With speculative loads (D020, `SPEC_LOADS=1`), the official

@@ -13,24 +13,18 @@
 //     (external wkl bus) because a load may replay.
 //   * Entries deallocate at select, except loads which set `issued` and
 //     deallocate at WB-success (ldone) or re-arm on replay (rep).
-//   * A load is eligible only when its older-unknown-store mask is 0.
-//     The mask is snapshotted at dispatch and ANDed each cycle with the
-//     SQ's current unknown mask — bits only ever clear, and a reused SQ
-//     slot can never re-set a bit (a store reusing a slot is younger
-//     than this load by construction).
+//   * A mem op is eligible only when its dispatch-time wait mask is 0
+//     (D021: the top encodes the load-speculation policy in the mask
+//     value — 0 / full older-unknown-store mask / one-hot store-set
+//     prediction). The mask is snapshotted at dispatch and ANDed each
+//     cycle with the SQ's current unknown mask — bits only ever clear,
+//     and a reused SQ slot can never re-set a bit (a store reusing a
+//     slot is younger than this waiter by construction).
 //   * Age = 6-bit ROB-tag distance from the ROB head tag.
 // ============================================================================
 `include "ooo_uop.vh"
 
-module ooo_iq #(
-    // SPEC_LOADS=1 (D020): a load is eligible even when older stores still
-    // have unknown addresses — speculative loads. The load queue's violation
-    // CAM catches the rare real conflict and replays via flush-at-head. When
-    // 0, the original conservative gate holds (a load waits for mask==0).
-    // IO/NPU strong ordering is preserved regardless, at EX (p2_replay on
-    // sq_qolder), so speculation is safe for those too.
-    parameter SPEC_LOADS = 1
-) (
+module ooo_iq (
     input  wire              clk,
     input  wire              reset,
 
@@ -53,6 +47,9 @@ module ooo_iq #(
 
     // SQ current unknown-address mask (valid & ~addr_known)
     input  wire [7:0]        sq_unknown,
+    // raw variant without the same-cycle fill bypass — consumed ONLY by
+    // the simulation invariant check at the bottom; unused in synthesis
+    input  wire [7:0]        sq_unknown_raw,
 
     // load writeback tag broadcast (external wakeup)
     input  wire              wkl_en,
@@ -106,14 +103,16 @@ module ooo_iq #(
             wire ready = v[g] && !issued[g] && r1[g] && r2[g];
             wire is_ctrl = u[g][`U_ISBR] | u[g][`U_ISJALR];
             wire is_mem  = u[g][`U_ISLOAD] | u[g][`U_ISSTORE];
-            // conservative: a load waits until all older store addresses are
-            // known (mask==0). Speculative (SPEC_LOADS): a load may issue
-            // anyway; the LQ violation CAM repairs a real conflict (D020).
-            wire ld_ok   = !u[g][`U_ISLOAD] || (mask[g] == 8'b0)
-                           || (SPEC_LOADS != 0);
+            // A mem op issues only once its dispatch-time wait mask has
+            // decayed to 0 (D021). The mask VALUE encodes the policy — the
+            // top dispatches 0 (speculate now), the full older-unknown-store
+            // mask (conservative, D020 SPEC_LOADS=0), or a one-hot predicted
+            // producer store (store-set). Loads AND stores share the gate;
+            // non-predicted stores dispatch mask=0, so store behavior is
+            // unchanged. The LQ violation CAM still repairs any under-wait.
             assign elig_br[g]  = ready && is_ctrl;
             assign elig_alu[g] = ready && !is_ctrl && !is_mem;
-            assign elig_mem[g] = ready && is_mem && ld_ok;
+            assign elig_mem[g] = ready && is_mem && (mask[g] == 8'b0);
             assign relage[g]   = u[g][`U_TAG] - head_tag;
         end
     endgenerate
@@ -340,5 +339,23 @@ module ooo_iq #(
             end
         end
     end
+
+`ifdef VERILATOR
+    // D021 INV-P5/P9: every resident wait-mask bit must denote a LIVE,
+    // still-unknown SQ slot — the strictly-older continuous-occupant
+    // property the mask-deadlock-freedom proof rests on (a bit pointing at
+    // a dead or reused slot would be the B013 class of residual-state
+    // bug). And only mem ops may carry wait masks.
+    integer ak;
+    always @(posedge clk) if (!reset) begin
+        for (ak = 0; ak < IQD; ak = ak + 1) begin
+            if (v[ak] && ((mask[ak] & ~sq_unknown_raw) != 8'b0))
+                $fatal(1, "ooo_iq: wait-mask bit on a dead/known SQ slot");
+            if (v[ak] && (mask[ak] != 8'b0)
+                && !(u[ak][`U_ISLOAD] || u[ak][`U_ISSTORE]))
+                $fatal(1, "ooo_iq: wait mask on a non-mem uop");
+        end
+    end
+`endif
 
 endmodule

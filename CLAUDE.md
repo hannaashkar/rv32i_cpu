@@ -326,16 +326,65 @@ merged main (in-order 14/14+40/40+25/25; OoO 14/14+40/40+25/25+25/25 `--vio`;
 - **Build gotcha:** Verilator builds SILENTLY FAIL without
   `VERILATOR_ROOT=…/ucrt64/share/verilator` exported.
 
-**Next** (Hanna deferred to a new session): (1) **Store-set / dependence
-predictor** — the clean fix for the hello.c −36% regression: stop re-speculating
-a load once it has violated, so violation-dense code (stack spills) falls back to
-conservative after the first miss while CoreMark keeps its +2.0%. New RTL —
-needs Hanna's go. (2) **imem block-RAM via `ram_init_file`** (even/odd
-single-port banks) + on-board MLP demo (Task 3, low risk). (3) **On-board
-bring-up of the merged OoO top** — flash the `.sof`, confirm the LED walker runs
-at 16.67 MHz (the board top is now OoO). (4) The deeper 2-stage pipelined
-scheduler (to actually beat in-order on HW; needs ~42 MHz) remains a separate
-future project. **Env note:** riscv-gcc under MSYS make needs TMP/TEMP/TMPDIR
-passed as **make variables** in **backslash** Windows form (else
-`Cannot create temporary file in C:\WINDOWS\`); exported shell vars don't reach
-the recipe.
+**2026-07-10** — branch `ooo-store-set`: **D021 store-set memory-dependence
+predictor (Chrysos & Emer, ISCA '98) — the D020 open call resolved.** Hanna
+approved a fully autonomous run ("industry-standard fix, god-tier mode").
+`docs/STORESET.md` is the binding spec; DECISIONS.md D021 has the full entry.
+- **Mechanism:** new `rtl/ooo/ooo_stset.v` — SSIT 64×{v,ssid[3:0]} on
+  pc[7:2] + LFST 16×{v,sqpos[2:0]}; the whole predictor is a *dispatch-time
+  mask policy* (the IQ's existing 8-bit store-wait masks). `LOAD_POLICY`
+  param on ooo_cpu: 0=conservative / 1=always-speculate (both verified
+  cycle-identical to D020) / **2=store sets (shipping default)** / 3=Alpha
+  21264 1-bit stWait (built for honest comparison). Safety bracket INV-P1:
+  predicted mask is ANDed with the conservative mask → every wait lies
+  between the two verified D020 extremes; tables are pure hints (lockstep-
+  invisible). In-set store→store ordering (livelock fix), slot1 same-cycle
+  LFST bypass (co-dispatched sw/lw spill pairs), 2-phase training off the
+  LQ-CAM cycle (zero logic after the D020 critical path), 2^16-cycle decay.
+- **Measured (4-policy table in D021): hello.c 2613 → 1989 cyc (90% of the
+  D020 regression recovered, violations 15 → 1), CoreMark IPC 1.026 KEPT
+  (421.77M cyc, official CRCs), `stset_precise.S` pointer-chase microbench:
+  store sets 609 vs 21264-1-bit 698 (−12.7%) vs conservative 618 vs
+  speculative 2149.** `ld_st` violations 49→31 (rest are single-shot sites
+  no PC predictor can help). New directed suites: stset_predict / stset_pair
+  / stset_precise.
+- **B014 found+fixed by its own assertion** (INV-P7 training-liveness): a
+  CAM hit in the exact `lq_flush_start` cycle trained against a ROB entry
+  being cleared that edge; capture gate needs `!lq_flush_start`.
+- **Verified:** unit TB (golden model, 200k random cycles, also passes with
+  the SSIT_AW=5 escape) + OoO 17/17 + 40/40 riscv-tests + 25/25 random +
+  25/25 --vio, all lockstep-clean, new invariant assertions armed (subset/
+  onehot/no-self-wait/mask⊆live-unknown/training-liveness/ROB watchdog);
+  policies 0/1/3 spot-regressed; in-order untouched. Two adversarial reviews
+  (Verilog semantics + µarch corners): 0 confirmed defects.
+- **STA (bare-core char, seed 3 of 5 — the device is at its 96-97% capacity
+  cliff, 4 attempts failed to place; SSIT=32 trial also failed → table size
+  doesn't decide the fit):** 48,302 LEs (97%), net +64 LEs/+160 regs vs
+  D020. **Predictor NOT on the critical path** (lookup chain 19.2 ns ≈
+  50 MHz-capable; core Fmax 19.55 MHz set by the pre-existing dmem-load→
+  bypass→JALR→BTB path, 80% routing at the congested fit — the drop vs
+  D020's 26.32 is fit-luck, not predictor logic).
+- **⚠ BOARD FINDING (pre-existing, NOT from this branch):** a full board
+  compile (first since D019) shows `de10_top` **no longer fits the 10M50**:
+  predictor-free `main` maps to **51,225 LEs = 103%** of the device (with
+  predictor: 53,075 = 107%); the fitter fails "Can't fit" at 96% after
+  packing. The board has been over capacity since D020's LQ merged (that
+  gate was map-error-count only, which misses capacity). **Task 3
+  (imem→M9K) is now REQUIRED for any board bitstream** — the 4 KB
+  logic-ROM imem burns the ~4-5k LEs that would fix this. The last
+  buildable board top remains D019 (44,422 LEs) / tag `v3.1-inorder-fpga`
+  for the in-order core.
+
+**Next**: (1) **imem block-RAM via `ram_init_file`** (even/odd single-port
+banks) — now **REQUIRED** to rebuild any board `.sof` (see board finding
+above), and it unlocks the on-board MLP demo (Task 3). (2) **On-board
+bring-up of the merged OoO top** — needs (1) first; then flash the `.sof`,
+confirm the LED walker runs at 16.67 MHz (the board top is OoO with the
+predictor in the tree). (3) The
+2-stage pipelined scheduler (to beat in-order on HW; needs ~42 MHz) remains
+a separate future project. (4) Optional: store-set telemetry CSR (violation
+counter) for on-board measurement. **Env note:** riscv-gcc under MSYS make
+needs TMP/TEMP/TMPDIR passed as **make variables** in **backslash** Windows
+form (else `Cannot create temporary file in C:\WINDOWS\`); exported shell
+vars don't reach the recipe. Verilator builds SILENTLY FAIL without
+`VERILATOR_ROOT=…/ucrt64/share/verilator` exported.
