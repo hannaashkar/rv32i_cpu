@@ -10,6 +10,12 @@
 # ============================================================================
 
 set_global_assignment -name FAMILY "MAX 10"
+# ERAM internal-configuration mode (D022): reserves CFM space for M9K
+# initialization — REQUIRED for any initialized RAM/ROM on MAX 10. Without
+# it Quartus rejects MIF init outright (Error 16031 on instantiated
+# altsyncram; the misleading B006 message on inferred RAM). Config-flash
+# layout only; JTAG .sof programming and the pin assignments are untouched.
+set_global_assignment -name INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH ERAM"
 set_global_assignment -name DEVICE 10M50DAF484C7G
 set_global_assignment -name TOP_LEVEL_ENTITY de10_top
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 20.1.1

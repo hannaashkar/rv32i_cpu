@@ -24,13 +24,20 @@
 //             using pc's parity REGISTERED WITH THE READ (sel_q): the pc on
 //             the address bus moves on, the captured pair must not.
 // Contents:   Simulation loads a flat hex ($readmemh, +imem=<file> override)
-//             and splits it into the banks; unused words are NOP-padded.
-//             For synthesis the banks carry ram_init_file attributes naming
-//             synth/imem_even.mif / imem_odd.mif (`make mif`) — the explicit
-//             init file MAX 10 needs, since Quartus 20.1 refuses to MIF-init
-//             an auto-inferred initialized ROM (B006, "MIF not supported for
-//             the selected family"). No initial block exists on the banks
-//             outside simulation: the .mif files are the sole initializer.
+//             and splits it into behavioral banks; unused words NOP-padded.
+//             Synthesis instantiates two altsyncram ROMs with init_file =
+//             imem_even.mif / imem_odd.mif (`make mif`, paths resolve in
+//             synth/). Explicit instantiation is REQUIRED, not a style
+//             choice: Quartus 20.1 on MAX 10 refuses to MIF-init ANY
+//             inferred RAM/ROM (B006 "MIF is not supported for the selected
+//             family") — measured to persist even with an explicit
+//             ram_init_file attribute, which bakes the contents into
+//             ~3.5k LEs of logic instead of M9K.
+// Read reg:   the behavioral arm registers the DATA (q <= mem[addr]); the
+//             altsyncram ROM registers the ADDRESS (q follows the captured
+//             address). For a ROM these are equivalent — contents never
+//             change between capture and read — and clocken0 = rd_en gives
+//             the identical hold: freezing the address register freezes q.
 // Assumes:    pc word-aligned (pc[1:0] ignored); upper address bits alias;
 //             running past the program is harmless (NOP padding, both in
 //             sim and in the generated MIFs).
@@ -55,36 +62,23 @@ module imem_banked #(
     localparam AW = $clog2(DEPTH_WORDS);   // word-address width
     localparam BW = AW - 1;                // per-bank address width
 
-    // NOTE: keep the word "synthesis" out of ordinary comments in this file —
-    // Quartus parses "synthesis <x>" inside comments as a pragma. The two
-    // attributes below exploit exactly that; their .mif paths resolve
-    // relative to the Quartus project dir (synth/). Verilator sees only a
-    // plain comment.
-    reg [31:0] bank_even [0:DEPTH_WORDS/2-1] /* synthesis ram_init_file = "imem_even.mif" */;
-    reg [31:0] bank_odd  [0:DEPTH_WORDS/2-1] /* synthesis ram_init_file = "imem_odd.mif" */;
-
     // Bank addressing (derivation in the header). The BW-bit add wraps at
     // the top of memory — same upper-bit aliasing as imem.v.
     wire [AW-1:0] w0 = pc[AW+1:2];
     wire [BW-1:0] ea = w0[AW-1:1] + {{(BW-1){1'b0}}, w0[0]};
     wire [BW-1:0] oa = w0[AW-1:1];
 
-    // Registered reads (the M9K read-register pattern, D016/B006) plus the
-    // captured parity. All three share rd_en so a held pair stays coherent.
+`ifdef VERILATOR
+    // Behavioral banks with registered DATA reads (the D016/B006 pattern).
+    // Both reads share rd_en with sel_q below so a held pair stays coherent.
+    reg [31:0] bank_even [0:DEPTH_WORDS/2-1];
+    reg [31:0] bank_odd  [0:DEPTH_WORDS/2-1];
     reg [31:0] even_q, odd_q;
-    reg        sel_q;
     always @(posedge clk) if (rd_en) begin
         even_q <= bank_even[ea];
         odd_q  <= bank_odd [oa];
-        sel_q  <= w0[0];
     end
 
-    // Output crossbar on the REGISTERED parity — a combinational select from
-    // the current pc would mis-pair whenever pc has advanced past the hold.
-    assign instr0 = sel_q ? odd_q  : even_q;
-    assign instr1 = sel_q ? even_q : odd_q;
-
-`ifdef VERILATOR
     // Simulation init: NOP-pad a flat staging image (running past the
     // program's end is harmless, not X-propagation), load the program
     // (+imem=<hexfile> override, as the harness always passes), then split
@@ -105,6 +99,64 @@ module imem_banked #(
             bank_odd [i/2] = flat[i+1];
         end
     end
+`else
+    // Synthesis: two explicit altsyncram single-port ROMs (M9K), one per
+    // bank, MIF-initialized. clocken0 = rd_en freezes the address register,
+    // which freezes q — the same hold contract as the behavioral arm (see
+    // header). init_file paths resolve relative to the Quartus project dir.
+    wire [31:0] even_q, odd_q;
+    altsyncram #(
+        .operation_mode("ROM"),
+        .width_a(32),
+        .widthad_a(BW),
+        .numwords_a(DEPTH_WORDS/2),
+        .init_file("imem_even.mif"),
+        .intended_device_family("MAX 10"),
+        .ram_block_type("M9K"),
+        .lpm_type("altsyncram"),
+        .outdata_reg_a("UNREGISTERED"),
+        .address_aclr_a("NONE"),
+        .outdata_aclr_a("NONE"),
+        .clock_enable_input_a("NORMAL"),
+        .clock_enable_output_a("BYPASS")
+    ) U_EVEN (
+        .clock0(clk),
+        .clocken0(rd_en),
+        .address_a(ea),
+        .q_a(even_q)
+    );
+    altsyncram #(
+        .operation_mode("ROM"),
+        .width_a(32),
+        .widthad_a(BW),
+        .numwords_a(DEPTH_WORDS/2),
+        .init_file("imem_odd.mif"),
+        .intended_device_family("MAX 10"),
+        .ram_block_type("M9K"),
+        .lpm_type("altsyncram"),
+        .outdata_reg_a("UNREGISTERED"),
+        .address_aclr_a("NONE"),
+        .outdata_aclr_a("NONE"),
+        .clock_enable_input_a("NORMAL"),
+        .clock_enable_output_a("BYPASS")
+    ) U_ODD (
+        .clock0(clk),
+        .clocken0(rd_en),
+        .address_a(oa),
+        .q_a(odd_q)
+    );
+`endif
+
+    // Captured parity + output crossbar, shared by both arms. The select is
+    // the parity REGISTERED with the read — a combinational select from the
+    // current pc would mis-pair whenever pc has advanced past the hold.
+    reg sel_q;
+    always @(posedge clk) if (rd_en)
+        sel_q <= w0[0];
+    assign instr0 = sel_q ? odd_q  : even_q;
+    assign instr1 = sel_q ? even_q : odd_q;
+
+`ifdef VERILATOR
 
     // INV-F1: after every capture, the crossbarred outputs equal the flat
     // image at the captured pc / pc+4 — checks the split, both banks'
