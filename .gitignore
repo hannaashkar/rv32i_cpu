@@ -2,11 +2,20 @@
 synth/db/
 synth/incremental_db/
 synth/output_files/
+synth/*.log
 *.qws
 *.qar
 *.qarlog
 *.rpt
 *.summary
+
+# Throwaway STA / characterization projects (D021 Fmax runs etc.) — numbers
+# live in docs/DECISIONS.md; the working dirs are disposable.
+synth_sta*/
+
+# The two imem bank init images ARE checked in (same policy as
+# sw/demo/*.hex): a fresh clone must compile the Quartus project without
+# Python or riscv-gcc. Regenerate with `make mif`.
 
 # Simulation build (Verilator runs from the repo root)
 obj_dir/

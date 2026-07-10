@@ -10,6 +10,12 @@
 # ============================================================================
 
 set_global_assignment -name FAMILY "MAX 10"
+# ERAM internal-configuration mode (D022): reserves CFM space for M9K
+# initialization — REQUIRED for any initialized RAM/ROM on MAX 10. Without
+# it Quartus rejects MIF init outright (Error 16031 on instantiated
+# altsyncram; the misleading B006 message on inferred RAM). Config-flash
+# layout only; JTAG .sof programming and the pin assignments are untouched.
+set_global_assignment -name INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH ERAM"
 set_global_assignment -name DEVICE 10M50DAF484C7G
 set_global_assignment -name TOP_LEVEL_ENTITY de10_top
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 20.1.1
@@ -97,14 +103,17 @@ set_global_assignment -name VERILOG_FILE ../rtl/core/pc.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/register_file.v
 set_global_assignment -name VERILOG_FILE ../rtl/core/sign_extend.v
 set_global_assignment -name VERILOG_FILE ../rtl/mem/imem.v
+# Banked M9K program ROM for the OoO frontend (D022); init from
+# imem_even.mif / imem_odd.mif in this directory (regenerate: make mif)
+set_global_assignment -name VERILOG_FILE ../rtl/mem/imem_banked.v
 set_global_assignment -name VERILOG_FILE ../rtl/mem/dmem.v
 set_global_assignment -name VERILOG_FILE ../rtl/soc/mmio.v
 set_global_assignment -name VERILOG_FILE ../rtl/top/pll.v
 set_global_assignment -name VERILOG_FILE ../rtl/top/de10_top.v
 # Timing constraints — real .sdc for the PLL-clocked core (B005/D017)
 set_global_assignment -name SDC_FILE rv32i_cpu.sdc
-# 2-wide OoO core (D013). Compiled for synthesizability; the FPGA top
-# still instantiates cpu_pipeline until the timing/PLL stage (B005).
+# 2-wide OoO core (D013) — the FPGA top instantiates ooo_cpu since the
+# D019 merge (de10_top.v, PLL /3 = 16.67 MHz).
 set_global_assignment -name SEARCH_PATH ../rtl/ooo
 set_global_assignment -name SEARCH_PATH ../rtl/core
 set_global_assignment -name VERILOG_FILE ../rtl/ooo/gshare_bp.v

@@ -197,7 +197,27 @@ Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
   (decision D011/F1). Directed test `sw/tests/store_fwd.S` fails before
   the fix (code 2, stale store) and passes after. Fixing it exposed B008.
 
-## B006 — Memories synthesize to flip-flops instead of block RAM — PARTIALLY FIXED (2026-07-07)
+## B006 — Memories synthesize to flip-flops instead of block RAM — FIXED (2026-07-10)
+
+- **Final update (2026-07-10, decision D022) — real root cause found:** the
+  three-session "MIF is not supported for the selected family" wall was
+  never a family limitation. MAX 10 keeps M9K init images in its internal
+  configuration flash, and the project had no ERAM-capable
+  internal-configuration mode selected; Quartus therefore rejected EVERY
+  init path (inferred `$readmemh` ROM, `ram_init_file` attribute — which
+  bakes contents into logic instead — and explicit altsyncram, which
+  finally names the true error: **16031 "Current Internal Configuration
+  mode does not support memory initialization or ROM. Select Internal
+  Configuration mode with ERAM"**). Fix: one QSF line,
+  `INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH ERAM"`, plus explicit
+  altsyncram ROMs in `rtl/mem/imem_banked.v` (even/odd banks, D022). The
+  OoO board top's imem is now **4 M9Ks + 55 LEs** (was a logic ROM), fit
+  48,153/49,760 LEs, `.sof` rebuilt. **How caught:** a bare-module proof
+  project with a high-entropy 1024-word MIF (so the ROM couldn't
+  constant-fold) — the led_demo image folds to ~100 LEs and had masked the
+  whole issue by making imem look cheap. The in-order core's single-port
+  imem stays a logic ROM by choice (not the board top; its D016 fold is
+  tagged and hardware-confirmed). dmem was already block RAM since D016.
 
 - **Update (2026-07-07, decision D016):** in-order core reworked to
   synchronous-read memories. **dmem now infers block RAM** (Quartus 20.1

@@ -375,15 +375,52 @@ approved a fully autonomous run ("industry-standard fix, god-tier mode").
   buildable board top remains D019 (44,422 LEs) / tag `v3.1-inorder-fpga`
   for the in-order core.
 
-**Next**: (1) **imem block-RAM via `ram_init_file`** (even/odd single-port
-banks) — now **REQUIRED** to rebuild any board `.sof` (see board finding
-above), and it unlocks the on-board MLP demo (Task 3). (2) **On-board
-bring-up of the merged OoO top** — needs (1) first; then flash the `.sof`,
-confirm the LED walker runs at 16.67 MHz (the board top is OoO with the
-predictor in the tree). (3) The
-2-stage pipelined scheduler (to beat in-order on HW; needs ~42 MHz) remains
-a separate future project. (4) Optional: store-set telemetry CSR (violation
-counter) for on-board measurement. **Env note:** riscv-gcc under MSYS make
+**2026-07-10 (later)** — branch `imem-m9k` (D022): **Task 3 DONE — imem is
+banked M9K block RAM and the board FITS again** (first buildable board top
+since D019; .sof rebuilt with the OoO core + store-set predictor at
+16.67 MHz).
+- **B006 root cause found after three sessions of workarounds: it was never
+  a family limitation.** MAX 10 needs an ERAM-capable internal-configuration
+  mode to init M9Ks; one QSF line (`INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP
+  IMAGE WITH ERAM"`) + explicit altsyncram ROMs unlock MIF init. The
+  `ram_init_file` attribute alone bakes contents into LOGIC (measured:
+  3.5k LEs for a high-entropy image); the inferred path's "MIF is not
+  supported for the selected family" message was this mode all along.
+- `rtl/mem/imem_banked.v`: even/odd single-port banks (word i → bank i&1 @
+  i>>1; pc/pc+4 always oppose in parity), output crossbar on the parity
+  REGISTERED with the read, `rd_en` = the B012 hold. OoO F/D fold:
+  `rd_en = fd_accept` is the whole contract (every edge that sets fd_v*
+  captures mem[pcF]; redirects null the valids) — **cycle-EXACT: hello.c
+  1989 cyc, CoreMark 421,766,309 cyc / IPC 1.026 / official CRCs, MLP
+  59,252,344 cyc bit-identical vs a pre-fold-main reference build.** MIF
+  flow: `scripts/hex2mif.py` + `make mif` → `synth/imem_{even,odd}.mif`
+  (checked in, NOP-padded, round-trip-checked).
+- **Capacity assumption corrected (measure, don't assume):** the old imem
+  was NOT ~4-5k LEs — Quartus constant-folds the 12-word LED demo ROM to
+  ~98 LEs; the real LE pig is **gshare_bp: 9,354 LEs** (PHT + async BTB in
+  fabric — the obvious future shrink lever). The fit came back via packing
+  headroom: A&S 53,004 → **fitted 48,153/49,760 (97%) on the DEFAULT seed**
+  (D021's board "Can't fit" was placement luck at the same density).
+- **Board (default seed): fit SUCCESS 48,153 LEs (97%), M9K 11/182 (imem =
+  4 + 55 LEs), timing MET at 16.67 MHz (+6.34 ns slow-85C), .sof built.**
+  Verified on the shipping RTL: OoO 18/18 (incl. new
+  `sw/tests/fetch_hold_redirect.S`) + 40/40 + 25/25 + 25/25 `--vio`,
+  lockstep-clean, `LOAD_POLICY=1` spot 25/25; in-order untouched
+  (18/18+40/40+25/25). INV-F1 fetch self-check armed in every run. No new
+  hardware bug (no B015). `synth_sta*/` gitignored; qsf pins untouched.
+- **NOT yet on silicon: no USB-Blaster was connected** (`quartus_pgm -l`:
+  no JTAG hardware) — flashing is Hanna's step, see Next.
+
+**Next**: (1) **Flash the D022 `.sof`** (board + USB cable → `quartus_pgm
+-m jtag -o "p;output_files/rv32i_cpu.sof"` in `synth/`) and confirm the LED
+walker steps at 16.67 MHz — the walk itself is the bank/crossbar acceptance
+test. (2) **MLP memory sizing branch** (imem ≥ 2048 words — MLP text is
+1,272 — and dmem ~13k words with MIF-initialized weights; the D022 ERAM
+mode + altsyncram recipe now makes dmem init possible too) → on-board MNIST
+demo. (3) The 2-stage pipelined scheduler (to beat in-order on HW; needs
+~42 MHz) remains a separate future project; `gshare_bp`'s 9.4k LEs (PHT →
+M9K) is the companion area lever. (4) Optional: store-set telemetry CSR
+(violation counter) for on-board measurement. **Env note:** riscv-gcc under MSYS make
 needs TMP/TEMP/TMPDIR passed as **make variables** in **backslash** Windows
 form (else `Cannot create temporary file in C:\WINDOWS\`); exported shell
 vars don't reach the recipe. Verilator builds SILENTLY FAIL without

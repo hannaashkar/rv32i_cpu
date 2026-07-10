@@ -92,24 +92,35 @@ module ooo_cpu #(
     reg  [31:0] pcF /*verilator public_flat_rd*/;
     wire [31:0] pc0 = pcF;
     wire [31:0] pc1 = pcF + 32'd4;
-    wire [31:0] instr0, instr1;
-
-    // SYNC_READ defaults to 0 → combinational fetch, unchanged for the OoO
-    // frontend (clk unused). Its memory rework is a separate later stage.
-    imem IMEM0 (
-        .clk(clk), .hold(1'b0),
-        .pc(pc0), .instruction(instr0),
-        .pc2(pc1), .instruction2(instr1)
-    );
-
-    wire        bt_hit0, bt_cond0, bt_dir0, bt_hit1, bt_cond1, bt_dir1;
-    wire [31:0] bt_tgt0, bt_tgt1;
-    wire [9:0]  ghr_now;
 
     wire fd_accept;                 // F/D register will load new content
     wire dr_accept;                 // D/R register will load new content
     wire dec_redirect;              // decode-stage redirect (JAL / RAS ret)
     wire [31:0] dec_redirect_pc;
+
+    // Banked M9K program ROM (D022): the banks' read registers ARE the F/D
+    // instruction registers (fd_i0/fd_i1 below) — the same latch fold as
+    // D016 (in-order IF/ID) and D018 (dmem load). rd_en = fd_accept is the
+    // whole contract: fd_v0/fd_v1 are set to 1 in exactly one place, the
+    // lowest-priority `else if (fd_accept)` branch of the F/D block, so
+    // every edge that asserts the valids also captures mem[pcF] — invariant:
+    // whenever fd_v*=1 the ROM outputs are the words at fd_pc0/fd_pc1.
+    // Every redirect (lq_flush_start/lq_flushing/restore_en/dec_redirect)
+    // nulls the valids, so a stale or wrong-path capture is never consumed,
+    // and the first fd_accept after a redirect captures the redirected pair
+    // on the same edge it re-asserts the valids — the 2-cycle mispredict
+    // penalty is unchanged. !fd_accept is the B012 hold: pcF has already
+    // advanced past a held group, so the read registers must freeze with it.
+    wire [31:0] fd_i0, fd_i1;
+    imem_banked IMEM0 (
+        .clk(clk), .rd_en(fd_accept),
+        .pc(pc0),
+        .instr0(fd_i0), .instr1(fd_i1)
+    );
+
+    wire        bt_hit0, bt_cond0, bt_dir0, bt_hit1, bt_cond1, bt_dir1;
+    wire [31:0] bt_tgt0, bt_tgt1;
+    wire [9:0]  ghr_now;
 
     // predictions
     wire take0      = bt_hit0 && (!bt_cond0 || bt_dir0);
@@ -159,16 +170,16 @@ module ooo_cpu #(
         .train_ghr(train_en ? train_ghr : 10'b0)
     );
 
-    // F/D register
+    // F/D register (instructions live in IMEM0's read registers, D022)
     reg         fd_v0, fd_v1;
-    reg  [31:0] fd_pc0, fd_pc1, fd_i0, fd_i1, fd_pnpc0, fd_pnpc1;
+    reg  [31:0] fd_pc0, fd_pc1, fd_pnpc0, fd_pnpc1;
     reg  [9:0]  fd_ghr0, fd_ghr1;
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
             pcF <= 32'b0;
             fd_v0 <= 1'b0; fd_v1 <= 1'b0;
-            fd_pc0 <= 0; fd_pc1 <= 0; fd_i0 <= 0; fd_i1 <= 0;
+            fd_pc0 <= 0; fd_pc1 <= 0;
             fd_pnpc0 <= 0; fd_pnpc1 <= 0; fd_ghr0 <= 0; fd_ghr1 <= 0;
         end else if (lq_flush_start) begin
             // load-ordering-violation flush: refetch from the violated load's
@@ -195,7 +206,6 @@ module ooo_cpu #(
             fd_v0    <= 1'b1;
             fd_v1    <= !kill1;
             fd_pc0   <= pc0;   fd_pc1   <= pc1;
-            fd_i0    <= instr0; fd_i1   <= instr1;
             fd_pnpc0 <= pnpc0_f; fd_pnpc1 <= pnpc1_f;
             fd_ghr0  <= ghr_now; fd_ghr1 <= ghr_now;
         end
