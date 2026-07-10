@@ -5,6 +5,85 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D022 — 2026-07-10 — imem → even/odd banked M9K ROM + the real B006 root cause (MAX 10 ERAM config mode); the board top FITS again (48,153 LEs / 97%), .sof restored
+
+**Context:** the D021 board finding — `de10_top` no longer fit the 10M50
+(A&S 53,075 LEs vs 49,760; fitter "Can't fit"), no board bitstream buildable
+since D020. Hanna's calls for this branch (`imem-m9k`): **even/odd
+single-port M9K banks** split on word parity (over replicated-ROM and
+true-dual-port options), and **fit-fix-first scope** (imem stays 4 KB; MLP
+memory sizing is the next branch).
+
+**Mechanism (rtl/mem/imem_banked.v + the fetch fold in ooo_cpu.v):** word
+`i` lives in bank `i&1` at bank address `i>>1`; `pc` and `pc+4` always have
+opposite word parity, so two single-port ROMs serve the 2-wide fetch every
+cycle, aligned or not (even-bank addr = `(w0>>1)+w0[0]`, odd = `w0>>1`). The
+output crossbar un-swaps the pair on the parity **registered with the read**
+(`sel_q`) — a combinational select would mis-pair whenever pc has advanced
+past a hold. The F/D fold is the D016/D018 argument a third time: the ROMs'
+read registers ARE `fd_i0/fd_i1`, with **`rd_en = fd_accept` as the entire
+contract** — `fd_v*` are set only in the lowest-priority `fd_accept` branch,
+so every edge that asserts the valids also captures `mem[pcF]`; every
+redirect nulls the valids so a stale capture is never consumed; the first
+`fd_accept` after a redirect captures the redirected pair on the same edge
+it re-asserts the valids. Mispredict penalty unchanged; `!fd_accept` is
+B012's hold. Init flow: `scripts/hex2mif.py` splits the flat program hex
+into `synth/imem_even.mif`/`imem_odd.mif` (checked in, `make mif`),
+NOP-padded so board behavior past the program end matches the sim's
+NOP-fill, with a `--check` round-trip against the padded image.
+
+**The real B006 root cause, found by the escalation ladder:** the
+`ram_init_file` attribute was honored for *contents* but the RAM stayed
+uninferred ("MIF is not supported for the selected family" — a high-entropy
+proof compile baked the program into 3,459 LEs of logic). Explicit
+altsyncram ROMs then failed with the *actual* error: **16031 — "Current
+Internal Configuration mode does not support memory initialization or
+ROM"**. MAX 10 stores M9K init images in its configuration flash, and the
+project had never selected an ERAM-capable internal-configuration mode. One
+QSF line — `INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH ERAM"` —
+unlocks MIF init on this family; the misleading family message that blocked
+imem since D016 was this mode all along. Proof project (bare imem_banked,
+random 1024-word program): **32,768 memory bits / 4 M9Ks / 74 LEs**.
+Shipping form: explicit `altsyncram` ROM per bank (`operation_mode("ROM")`,
+`init_file`, `clocken0 = rd_en`; registering the ADDRESS is equivalent to
+registering the DATA for a ROM, and freezing clocken0 freezes q — same hold
+contract), behavioral banks + INV-F1 self-check under `ifdef VERILATOR`.
+
+**A capacity assumption corrected (measure, don't assume):** the "~4-5k LE
+logic-ROM imem" premise from the D021 board finding was **wrong** — Quartus
+had been constant-folding the 12-word LED demo ROM to **98 LEs** all along
+(the D021 STA entity table shows it; the content bit-planes of a 12-word +
+NOP-pad image are nearly constant). The genuine LE pig is `gshare_bp`
+(**9,354 LEs / 5,926 regs** — PHT and async-read BTB in fabric; a known
+future lever). The board fit was recovered not by removing imem's LEs but
+by the fitter's packing headroom: A&S 53,004 → **fitted 48,153 / 49,760
+(97%)** on the **default seed**, mirroring D021's bare-core 53,140 → 48,302.
+The D021-era board failure was evidently placement luck at the same density.
+
+**Verified — the fold is cycle-EXACT on the shipping RTL:** hello.c **1989
+cyc / 1882 instret** and CoreMark **421,766,309 cyc / IPC 1.026 / official
+CRCs** identical to D021; MLP **59,252,344 cyc bit-identical** to a
+pre-fold-main reference build run side-by-side (which also refreshed stale
+docs: the NPU path is 627,343 cyc post-D021, not the pre-D020 1.05M).
+Suites: OoO regress 18/18 (incl. new `sw/tests/fetch_hold_redirect.S` —
+dependent-load backpressure, xorshift-directed mispredicts-while-held,
+odd-word redirect targets exercising both crossbar polarities, call/ret
+decode redirects), riscv-tests 40/40, random 25/25, `--vio` 25/25, all
+lockstep-clean; `LOAD_POLICY=1` spot 25/25; in-order untouched and green
+(18/18 + 40/40 + 25/25). INV-F1 (outputs ≡ flat shadow image at the
+captured pc/pc+4) armed on every fetch of every run; never fired. No new
+bug entry this branch.
+
+**Board result (default seed):** Fitter SUCCESS **48,153 / 49,760 LEs
+(97%)**, M9K **11/182** (imem = 4 at 2/bank + 55 LEs of crossbar/adder;
+memory bits 44,668), timing **MET at 16.67 MHz — worst-case setup slack
++6.34 ns** slow-85C (all corners positive), **`.sof` rebuilt** — the first
+buildable board top since D019, now with the store-set predictor in the
+tree. Flashing awaits a connected USB-Blaster (no JTAG cable was attached);
+the LED walker on silicon doubles as the bank/crossbar acceptance test (the
+12-word loop touches both banks every iteration). The ERAM mode line is a
+config-flash-layout assignment only — the sacred pin block is untouched.
+
 ## D021 — 2026-07-09 — Store-set memory-dependence predictor (Chrysos & Emer); hello.c 2613 → 1989 cyc (90% of the D020 regression recovered), CoreMark IPC 1.026 kept
 
 **Context:** D020 left an open call — speculation's net effect is governed by
