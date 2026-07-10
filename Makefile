@@ -158,8 +158,24 @@ sw/demo/%.elf: sw/demo/%.S sw/common/link.ld
 	$(RISCV_GCC) $(SW_CFLAGS) -o $@ $<
 
 .PHONY: demo
-demo: sw/demo/led_demo.hex
+demo: sw/demo/led_demo.hex mif
 	@echo "demo built: sw/demo/led_demo.hex (imem synthesis default)"
+
+# imem M9K init images (D022): flat demo hex -> even/odd bank MIFs consumed
+# by rtl/mem/imem_banked.v via ram_init_file (paths resolve in synth/).
+# Both .mif files are CHECKED IN (same policy as sw/demo/*.hex): a fresh
+# clone must compile the Quartus project without Python or riscv-gcc.
+MIF_EVEN := synth/imem_even.mif
+MIF_ODD  := synth/imem_odd.mif
+
+$(MIF_EVEN): sw/demo/led_demo.hex scripts/hex2mif.py
+	$(PYTHON) scripts/hex2mif.py $< $(MIF_EVEN) $(MIF_ODD) \
+	    --depth-words 1024 --pad 0x00000013 --check
+
+$(MIF_ODD): $(MIF_EVEN) ;
+
+.PHONY: mif
+mif: $(MIF_EVEN) $(MIF_ODD)
 
 %.bin: %.elf
 	$(RISCV_OBJCOPY) -O binary $< $@
