@@ -5,6 +5,62 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D023 — 2026-07-11 — MLP memory sizing + 7-segment display path: the on-board MNIST demo (branch `mlp-board-demo`)
+
+**Context:** D022 put the board back in business but the memories were demo-
+sized (4 KB imem / 1 KB dmem); the MNIST MLP needs ~5 KB of code and ~50 KB
+of data (weights dominate). The D022 ERAM recipe made initialized M9K
+possible for the first time — this branch applies it to dmem, which is what
+makes a data-carrying board program possible at all (there is no loader;
+.data must be in the RAM at power-up).
+
+**Hanna's calls (AskUserQuestion):** result display on the **7-segment
+displays** (HEX pins added to the qsf — first pin additions since the
+original build; verified against two independent DE10-Lite references,
+additive only), **8 test images** selected with SW[2:0], and **64 KB dmem**
+(round power of two over a tight fit — M9K headroom is plentiful).
+
+**Memory sizing (rtl/mem/dmem.v, imem_banked.v):** synthesis defaults grew
+to imem 2048 words (8 KB) / dmem 16384 words (64 KB). dmem's SYNC_READ arm
+now instantiates an **explicit altsyncram in simple-dual-port mode** (port
+A = byte-enabled write, port B = registered-address read) initialized from
+`synth/dmem.mif` — explicit because MAX 10 refuses MIF init on any inferred
+RAM (B006/D022). `read_during_write_mode_mixed_ports("OLD_DATA")` pins the
+one observable RDW corner to the behavioral arm's nonblocking semantics.
+The behavioral (Verilator) arm is bit-identical to before; the byte-enable
+write logic is shared verbatim between both arms, so sim-vs-silicon
+divergence in the write path is structurally impossible.
+
+**MMIO HEX registers (rtl/soc/mmio.v):** 0x4000000C = {HEX3..HEX0},
+0x40000014 = {HEX5,HEX4}; one raw ACTIVE-LOW segment byte per digit, bit 7
+= decimal point, reset = all dark. Hardware does not decode digits — the
+font lives in software (sw/common/rv32.h) — keeping the RTL a pure 48-bit
+register. Both registers read back and are ISS-mirrored (iss.h), so every
+HEX access in every test is lockstep-compared; directed test
+sw/tests/hex_mmio.S covers reset values, readback, the HEXHI 16-bit
+truncation, and neighbor isolation.
+
+**Board program (sw/npu_mlp/mlp_board.c + sw/common/link_board.ld):**
+NPU-only classify (one image in systolic column 0), reusing weights.h
+verbatim — the 8 demo images are the first 8 of the 32 already-vendored
+test images, so no new data was added. Phase 1 self-test classifies all 8
+vs the offline numpy integer reference and stores to MMIO_SIM_EXIT: the
+Verilator harness ends there (this IS the sim regression), the board
+ignores it and enters phase 2 — read SW[2:0], classify, display
+[image# | label | prediction] on HEX5/HEX2/HEX0, LEDR9 = correct.
+link_board.ld mirrors the real memory sizes (8 KB/64 KB) so exceeding the
+board is a LINK error, not silent address aliasing. Program text: 489
+words of 2048; data: 12,696 words of 16,384.
+
+**Verified:** regress 19/19 (incl. hex_mmio) + riscv-tests 40/40 + random
+25/25 on the in-order core; 19/19 + 40/40 + 25/25 + 25/25 --vio on the
+OoO core — all lockstep-clean. Board demo self-test: PASS on both cores,
+8/8 images correct (in-order 687,018 cyc IPC 0.817; OoO 376,112 cyc IPC
+1.492 — ~23 ms per full self-test at 16.67 MHz). Quartus full-compile
+numbers: see the status entry / BASELINE notes for this branch.
+
+---
+
 ## D022 — 2026-07-10 — imem → even/odd banked M9K ROM + the real B006 root cause (MAX 10 ERAM config mode); the board top FITS again (48,153 LEs / 97%), .sof restored
 
 **Context:** the D021 board finding — `de10_top` no longer fit the 10M50

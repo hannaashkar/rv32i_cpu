@@ -158,24 +158,46 @@ sw/demo/%.elf: sw/demo/%.S sw/common/link.ld
 	$(RISCV_GCC) $(SW_CFLAGS) -o $@ $<
 
 .PHONY: demo
-demo: sw/demo/led_demo.hex mif
-	@echo "demo built: sw/demo/led_demo.hex (imem synthesis default)"
+demo: sw/demo/led_demo.hex
+	$(MAKE) mif MIF_PROG=demo
+	@echo "demo built: LED walker MIFs (make mif restores the MLP demo)"
 
-# imem M9K init images (D022): flat demo hex -> even/odd bank MIFs consumed
-# by rtl/mem/imem_banked.v via ram_init_file (paths resolve in synth/).
-# Both .mif files are CHECKED IN (same policy as sw/demo/*.hex): a fresh
-# clone must compile the Quartus project without Python or riscv-gcc.
-MIF_EVEN := synth/imem_even.mif
-MIF_ODD  := synth/imem_odd.mif
+# Memory M9K init images (D022 imem, D023 dmem): program hex -> even/odd
+# bank MIFs for rtl/mem/imem_banked.v, data hex -> one flat MIF for
+# rtl/mem/dmem.v (paths resolve in synth/). All .mif files are CHECKED IN
+# (same policy as sw/demo/*.hex): a fresh clone must compile the Quartus
+# project without Python or riscv-gcc.
+#
+# MIF_PROG selects what the board runs (D023 default: the MLP demo).
+#   make mif MIF_PROG=demo  -> the LED walker, no data image
+#   make mif                -> MLP board demo (8 images, switch-selected)
+MIF_EVEN  := synth/imem_even.mif
+MIF_ODD   := synth/imem_odd.mif
+MIF_DMEM  := synth/dmem.mif
+IMEM_DEPTH := 2048
+DMEM_DEPTH := 16384
 
-$(MIF_EVEN): sw/demo/led_demo.hex scripts/hex2mif.py
+MIF_PROG ?= mlp
+ifeq ($(MIF_PROG),demo)
+MIF_TEXT := sw/demo/led_demo.hex
+MIF_DATA := sw/demo/empty_data.hex
+else
+MIF_TEXT := sw/npu_mlp/mlp_board.text.hex
+MIF_DATA := sw/npu_mlp/mlp_board.data.hex
+endif
+
+$(MIF_EVEN): $(MIF_TEXT) scripts/hex2mif.py
 	$(PYTHON) scripts/hex2mif.py $< $(MIF_EVEN) $(MIF_ODD) \
-	    --depth-words 1024 --pad 0x00000013 --check
+	    --depth-words $(IMEM_DEPTH) --pad 0x00000013 --check
 
 $(MIF_ODD): $(MIF_EVEN) ;
 
+$(MIF_DMEM): $(MIF_DATA) scripts/hex2mif.py
+	$(PYTHON) scripts/hex2mif.py $< $(MIF_DMEM) --single \
+	    --depth-words $(DMEM_DEPTH) --pad 0 --check
+
 .PHONY: mif
-mif: $(MIF_EVEN) $(MIF_ODD)
+mif: $(MIF_EVEN) $(MIF_ODD) $(MIF_DMEM)
 
 %.bin: %.elf
 	$(RISCV_OBJCOPY) -O binary $< $@
@@ -271,6 +293,27 @@ npu-mlp: $(RUN_BIN) $(MLP_DIR)/mlp.text.hex $(MLP_DIR)/mlp.data.hex
 npu-mlp-ooo:
 	$(MAKE) npu-mlp RUN_BIN=$(SIM_BIN_OOO)
 .PHONY: npu-mlp npu-mlp-ooo
+
+# --- board MLP demo (D023): NPU-only, switch-selected image, 7-seg output ----
+# Linked against link_board.ld (8 KB imem / 64 KB dmem) so exceeding the
+# synthesized memories is a LINK error. The sim run executes the demo's
+# self-test phase (classify images 0-7 vs the offline reference) and exits
+# at its MMIO_SIM_EXIT store; the board continues into the switch loop.
+$(MLP_DIR)/mlp_board.elf: $(MLP_DIR)/mlp_board.c $(MLP_DIR)/weights.h \
+                    sw/common/npu.h sw/common/link_board.ld $(SW_CDEPS)
+	$(RISCV_GCC) $(filter-out -T sw/common/link.ld,$(CFLAGS_C)) \
+	    -T sw/common/link_board.ld -o $@ $(CRT0) $(LIBMIN) $< -lgcc
+.PRECIOUS: $(MLP_DIR)/mlp_board.elf
+
+mlp-board: $(MLP_DIR)/mlp_board.text.hex $(MLP_DIR)/mlp_board.data.hex mif
+	@echo "mlp-board: MIFs in synth/ now hold the MLP demo (quartus recompile to ship)"
+
+npu-mlp-board: $(RUN_BIN) $(MLP_DIR)/mlp_board.text.hex $(MLP_DIR)/mlp_board.data.hex
+	./$(RUN_BIN) +imem=$(MLP_DIR)/mlp_board.text.hex \
+	    +dmem=$(MLP_DIR)/mlp_board.data.hex +max_cycles=900000000
+npu-mlp-board-ooo:
+	$(MAKE) npu-mlp-board RUN_BIN=$(SIM_BIN_OOO)
+.PHONY: mlp-board npu-mlp-board npu-mlp-board-ooo
 
 # --- run ------------------------------------------------------------------------
 test: $(RUN_BIN) $(SW_TESTS)
