@@ -19,8 +19,15 @@ derive_clock_uncertainty
 
 # --- Asynchronous / non-critical I/O ----------------------------------------
 # KEY[0] is a pushbutton reset (double-flop synchronized in RTL); SW are
-# switch inputs read by MMIO; LEDR are driven by MMIO. None are part of a
-# synchronous board interface, so they carry no meaningful I/O timing.
+# switch inputs read by MMIO; LEDR and HEX0-5 are driven by MMIO registers
+# for human eyes (D023). None are part of a synchronous board interface, so
+# they carry no meaningful I/O timing.
 set_false_path -from [get_ports {KEY[*]}] -to [all_registers]
 set_false_path -from [get_ports {SW[*]}]  -to [all_registers]
 set_false_path -from [all_registers] -to [get_ports {LEDR[*]}]
+set_false_path -from [all_registers] -to [get_ports {HEX0[*]}]
+set_false_path -from [all_registers] -to [get_ports {HEX1[*]}]
+set_false_path -from [all_registers] -to [get_ports {HEX2[*]}]
+set_false_path -from [all_registers] -to [get_ports {HEX3[*]}]
+set_false_path -from [all_registers] -to [get_ports {HEX4[*]}]
+set_false_path -from [all_registers] -to [get_ports {HEX5[*]}]
