@@ -96,7 +96,9 @@ with the bring-up program); the same mechanism puts the MNIST demo's
 program *and neural-net weights* into block RAM at power-up — there is no
 loader, the weights are simply there. The MNIST demo (RTL + software
 complete, self-test lockstep-verified on both cores, 8/8 images correct;
-first board flash pending): flip three switches to pick a handwritten
+board bitstream currently blocked by routing congestion at 96% LEs —
+unblocks with the planned gshare-predictor M9K shrink): flip three
+switches to pick a handwritten
 digit, the 7-segment displays show the true label next to the network's
 answer — ~3 ms per inference at the 16.67 MHz board clock
 (simulation-measured), with the OoO core finishing the same work in
@@ -180,7 +182,7 @@ Lite 20.1. Target board: Terasic **DE10-Lite** (Intel MAX 10
 - ✅ FPGA bring-up: PLL + SDC timing closure, block-RAM memories → `v3.1-inorder-fpga`
 - ✅ Speculative loads + load queue + store-set memory-dependence predictor
 - ✅ OoO core on the board: issue-queue select restructured (8.42 → 19.65 MHz), M9K program ROM, standalone flash boot
-- 🚧 On-board MNIST demo: RTL + software done, sim-verified on both cores (8/8 images); board compile + flash pending
+- 🚧 On-board MNIST demo: RTL + software done, sim-verified on both cores (8/8 images); board compile **blocked by routing congestion** (96% LEs, structural) — gated on the gshare_bp → M9K shrink
 - 🔜 2-stage pipelined scheduler (the ~42 MHz needed for the OoO core to beat in-order in wall-clock)
 - 🔭 ASIC tapeout of the NPU via Tiny Tapeout (SkyWater 130 nm)
 

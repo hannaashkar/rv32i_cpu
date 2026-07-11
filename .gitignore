@@ -57,5 +57,7 @@ obj_dir_ooo_cons/
 obj_dir_npu/
 obj_dir_probe/
 obj_dir_stset/
+obj_dir_cov/
+obj_dir_cov_ooo/
 synth/simulation/
 ruvector.db

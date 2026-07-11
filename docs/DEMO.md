@@ -3,8 +3,13 @@
 How to flash and drive the two board demos. The flashing procedure and the
 LED walker are hardware-proven (2026-07-11); the MNIST demo is
 lockstep-verified in simulation on both cores — its first board flash is
-the acceptance step. If anything surprises you, the board state section at
-the bottom is the first thing to check.
+the acceptance step. **Know before you compile: the MNIST bitstream does
+not currently route** — the fitter fails on routing congestion at 96% LE
+utilization (two placements, structural). "Can't route" here is expected,
+not a mistake on your part; it unblocks when the gshare_bp M9K shrink
+lands. The LED-walker configuration still compiles and flashes fine. If
+anything else surprises you, the board state section at the bottom is the
+first thing to check.
 
 The board top (`rtl/top/de10_top.v`) is the **2-wide out-of-order core**
 with the store-set predictor and the NPU, clocked at **16.67 MHz** (PLL /3
