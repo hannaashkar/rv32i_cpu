@@ -420,7 +420,9 @@ bank/crossbar acceptance test: every fetch crosses the parity crossbar, so
 a steady walk = banked imem + ERAM config mode proven on silicon. First
 OoO-core bitstream on the board since the 7.14 MHz D018 experiment, and the
 first ever with M9K-resident code. B006 is now closed end-to-end
-(sim → STA → silicon).
+(sim → STA → silicon). The `.pof` was also programmed+verified into the
+MAX 10 internal flash (CFM) — the board boots the CPU standalone on
+power-up, no PC needed.
 
 **Next**: (1) **Push `main`** (D021 `a83502a` + D022 `8875c2c` are still
 local-only — Hanna's step) and consider tagging (e.g. `v4.0-ooo-fpga`).
