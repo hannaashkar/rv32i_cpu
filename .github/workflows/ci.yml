@@ -1,0 +1,73 @@
+# CI for rv32i_cpu (audit 2026-07-11): the repo rule "main always passes
+# the full test suite" previously had zero enforcement. This runs the
+# directed + ISA suites on BOTH cores, plus a trimmed random suite
+# (5 seeds; the full 25-seed suites remain the local pre-merge gate —
+# every run is still lockstep-checked instruction by instruction).
+#
+# Toolchain on the runner: apt Verilator (Linux needs no VERILATOR_ROOT;
+# the Makefile guard is MSYS-scoped) + xPack riscv-none-elf-gcc (same
+# release as the local Windows install, so -march/-mabi behavior matches).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # Override the Windows-machine defaults in the Makefile (all ?=).
+      PYTHON: python3
+      XPACK_BIN: ${{ github.workspace }}/tools/xpack-riscv-none-elf-gcc-15.2.0-1/bin
+      RISCV_GCC: ${{ github.workspace }}/tools/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-gcc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Verilator
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends verilator zlib1g-dev
+          verilator --version
+
+      - name: Cache riscv-none-elf-gcc
+        id: cache-gcc
+        uses: actions/cache@v4
+        with:
+          path: tools/xpack-riscv-none-elf-gcc-15.2.0-1
+          key: xpack-riscv-gcc-15.2.0-1-linux-x64
+
+      - name: Install riscv-none-elf-gcc
+        if: steps.cache-gcc.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p tools
+          curl -fsSL -o gcc.tgz \
+            https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v15.2.0-1/xpack-riscv-none-elf-gcc-15.2.0-1-linux-x64.tar.gz
+          tar -xzf gcc.tgz -C tools
+          rm gcc.tgz
+
+      - name: Toolchain sanity
+        run: |
+          "$RISCV_GCC" --version | head -1
+          python3 --version
+
+      - name: Build simulators
+        run: |
+          make sim
+          make sim-ooo
+
+      - name: In-order suites (directed + ISA + random, lockstep-checked)
+        run: |
+          make regress
+          make regress-isa
+          make regress-rand RAND_SEEDS=5
+
+      - name: OoO suites (directed + ISA + random + violation stress)
+        run: |
+          make regress-ooo
+          make regress-isa-ooo
+          make regress-rand-ooo RAND_SEEDS=5
+          make regress-rand-vio-ooo RAND_SEEDS=5
