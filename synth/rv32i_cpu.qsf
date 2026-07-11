@@ -16,6 +16,14 @@ set_global_assignment -name FAMILY "MAX 10"
 # altsyncram; the misleading B006 message on inferred RAM). Config-flash
 # layout only; JTAG .sof programming and the pin assignments are untouched.
 set_global_assignment -name INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH ERAM"
+# Fitter effort (D023): the 64 KB dmem spreads ~64 M9Ks across the die and
+# their buses must route through a 97%-full fabric. The default Auto Fit
+# SKIPS routability optimizations ("Optimizations were skipped to reduce
+# compilation time") and left 817 signals unrouted; these two settings are
+# Quartus's documented answer to exactly that failure. Compile-time cost
+# only — no functional or pin impact.
+set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
 set_global_assignment -name DEVICE 10M50DAF484C7G
 set_global_assignment -name TOP_LEVEL_ENTITY de10_top
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 20.1.1
