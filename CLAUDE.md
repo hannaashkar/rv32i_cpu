@@ -424,15 +424,50 @@ first ever with M9K-resident code. B006 is now closed end-to-end
 MAX 10 internal flash (CFM) — the board boots the CPU standalone on
 power-up, no PC needed.
 
-**Next**: (1) **Push `main`** (D021 `a83502a` + D022 `8875c2c` are still
-local-only — Hanna's step) and consider tagging (e.g. `v4.0-ooo-fpga`).
-(2) **MLP memory sizing branch** (imem ≥ 2048 words — MLP text is
-1,272 — and dmem ~13k words with MIF-initialized weights; the D022 ERAM
-mode + altsyncram recipe now makes dmem init possible too) → on-board MNIST
-demo. (3) The 2-stage pipelined scheduler (to beat in-order on HW; needs
-~42 MHz) remains a separate future project; `gshare_bp`'s 9.4k LEs (PHT →
-M9K) is the companion area lever. (4) Optional: store-set telemetry CSR
-(violation counter) for on-board measurement. **Env note:** riscv-gcc under MSYS make
+**2026-07-11 (later)** — everything pushed (origin/main `2082aab`, plus
+branches `ooo-store-set`/`imem-m9k`); `.pof` confirmed in CFM (standalone
+boot). **D023 MLP board demo built on branch `mlp-board-demo` (NOT
+merged): design + software COMPLETE and sim-verified; board bitstream
+BLOCKED by routing congestion — parked pending the gshare shrink.**
+- Contents (6 commits): dmem 64 KB explicit altsyncram simple-dual-port
+  M9K with MIF init (the D022 ERAM recipe applied to RAM; byte-enabled
+  writes shared verbatim with the behavioral arm; OLD_DATA mixed-port
+  RDW), imem 2048 words, HEX0-5 7-seg MMIO path end-to-end (0x4000000C/
+  0x40000014, raw active-low segment bytes, font in sw; qsf pins ADDED —
+  verified vs two independent DE10-Lite references; .sdc false-paths),
+  ISS mirrors + `+sw=` plusarg, `sw/npu_mlp/mlp_board.c` (self-test on 8
+  images = the sim regression, then switch-driven HEX demo loop),
+  `link_board.ld` (8 KB/64 KB link-time fit guard), `make mif` emits the
+  MLP images (dmem.mif checked in; `MIF_PROG=demo` restores the walker).
+- **Verified:** regress 19/19 (new `hex_mmio.S`) + 40/40 + 25/25 both
+  cores (+25/25 `--vio` OoO), lockstep-clean; demo self-test 8/8 both
+  cores (in-order 687,018 cyc IPC 0.817; OoO 376,112 cyc IPC 1.492 —
+  the OoO does the same work in 1.83× fewer cycles; ~2.8 ms/inference at
+  16.67 MHz, sim-measured). README fact-harvested + adversarially
+  verified (6 findings fixed, incl. a per-inference latency mislabel and
+  two on-silicon overclaims); docs/DEMO.md added.
+- **Board compile FAILED twice — routing, not resources:** LEs 47,865/
+  49,760 (96%, below D022!), M9K 75/182 (41%, dmem = 64 blocks correctly
+  MIF-initialized), but the router left 817 (attempt 1, Auto Fit) / 1,415
+  (attempt 2, STANDARD FIT + FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION
+  ALWAYS — settings committed) interconnect conflicts unresolved. Two
+  different placements both un-routable ⇒ structural, not seed luck: a
+  96%-full fabric can't route buses to 64 scattered dmem M9Ks.
+- **Hanna's call: don't force the demo now.** The real fix is the known
+  LE pig — `gshare_bp` 9,354 LEs (19% of the device) of async-read
+  fabric tables → M9K. That frees routing slack for this demo AND the
+  future 2-stage scheduler. Predictor redesign = Hanna's microarchitecture
+  (sync-read retiming via read-with-next-pc, same-cycle read/train RDW
+  semantics); Claude presents design options first, per the rules.
+
+**Next**: (1) **gshare PHT/BTB → M9K branch** — present 2-3 design options
+(tradeoffs: IPC neutrality, timing, LE savings) for Hanna's pick, then
+implement + lockstep-verify; goal ≤ ~40k LEs board top. (2) Recompile
+`mlp-board-demo` after the shrink → flash → **on-board MNIST demo**
+(demo video!). (3) 2-stage pipelined scheduler (~42 MHz target) after the
+fabric has room. (4) Optional cheap fit gambles if ever wanted (labeled
+gambles: trim baked-in images 32→8 → dmem ~40 KB, altsyncram
+`maximum_depth=8192` hint, seed sweep). **Env note:** riscv-gcc under MSYS make
 needs TMP/TEMP/TMPDIR passed as **make variables** in **backslash** Windows
 form (else `Cannot create temporary file in C:\WINDOWS\`); exported shell
 vars don't reach the recipe. Verilator builds SILENTLY FAIL without
