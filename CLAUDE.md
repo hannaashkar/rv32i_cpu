@@ -460,15 +460,68 @@ BLOCKED by routing congestion — parked pending the gshare shrink.**
   (sync-read retiming via read-with-next-pc, same-cycle read/train RDW
   semantics); Claude presents design options first, per the rules.
 
-**Next**: (1) **gshare PHT/BTB → M9K branch** — present 2-3 design options
-(tradeoffs: IPC neutrality, timing, LE savings) for Hanna's pick, then
-implement + lockstep-verify; goal ≤ ~40k LEs board top. (2) Recompile
-`mlp-board-demo` after the shrink → flash → **on-board MNIST demo**
-(demo video!). (3) 2-stage pipelined scheduler (~42 MHz target) after the
-fabric has room. (4) Optional cheap fit gambles if ever wanted (labeled
-gambles: trim baked-in images 32→8 → dmem ~40 KB, altsyncram
-`maximum_depth=8192` hint, seed sweep). **Env note:** riscv-gcc under MSYS make
-needs TMP/TEMP/TMPDIR passed as **make variables** in **backslash** Windows
-form (else `Cannot create temporary file in C:\WINDOWS\`); exported shell
-vars don't reach the recipe. Verilator builds SILENTLY FAIL without
-`VERILATOR_ROOT=…/ucrt64/share/verilator` exported.
+**2026-07-11 (night) — FULL-PROJECT AUDIT + INFRA HARDENING BATCH**
+(7 commits on `mlp-board-demo`, pushed; **docs/AUDIT-2026-07-11.md is the
+audit report AND the continuation roadmap — live checkboxes, owners,
+evidence — read it before picking the next task**):
+- **Audit headline (from the failed fit's per-entity table, first time
+  read): there are TWO LE pigs, not one — `ooo_prf` 10,947 LCs (6R/3W
+  64×32 async-read PRF) ≈ `gshare_bp` 11,137 LCs; together 44% of the
+  device. And the BTB data arrays are ALREADY M9K in this build (0 LCs)
+  — gshare's LCs are PHT-side, so the shrink design must target the PHT
+  read/update path, not the BTB.** Tier-2 area levers (all Hanna calls):
+  IQ payload split (~3k), checkpoint slimming (~1-3k), payload-array
+  async-reset removal. Timing: D022's 18.64 MHz was an Auto-Fit floor
+  (timing opts skipped); JALR rides the full shifter cone (~10 ns
+  recoverable via dedicated target adder); PLL /2=25 MHz unreachable now
+  — 20-22 MHz fractional is the honest post-shrink step.
+- **Infra batch landed + verified (19/19 + 40/40 + 5/5-rand lockstep,
+  BOTH cores):** Makefile landmine guards (VERILATOR_ROOT must be the
+  MOUNT form `/ucrt64/share/verilator` — the `/c/...` spelling is
+  REJECTED as "inconsistent path"; TMP/TEMP baked into the RISCV_GCC
+  invocation); **new bug found: `cmp` is not installed in MSYS2, so all
+  `echo | cmp -s -` stamps rewrote every run — the OoO model had been
+  silently RE-VERILATING ON EVERY BUILD** (fixed via cat-compare);
+  `make mif` stale-trap fixed (MIF_PROG switch now invalidates — before,
+  the board could silently ship the WRONG program); `synth-check` gained
+  an LE-budget gate (52,000 default; proven firing at the current
+  53,200); new `synth-fit`/`synth-sta` + `scripts/sta_paths.tcl` archive
+  the top-20 critical paths per compile; .PHONY fixes; stale-hex-glob
+  fix; coremark pipefail.
+- **Verification upgrades:** lockstep divergence diagnostics (64-entry
+  retired ring buffer + full ISS register dump on every mismatch path;
+  `+trace_at=<cyc>` late-opened FST for long runs; `+force_diverge=<n>`
+  permanent self-test — verified exit-3 dumps on both cores).
+  **`make coverage` = the roadmap's promised coverage deliverable:
+  measured 99.0% RTL line coverage (1338/1351, both cores, 59 programs
+  each)**; uncovered tail = the FENCE/ECALL/EBREAK paths no test
+  executes (audit finding). First CI: `.github/workflows/ci.yml`
+  (best-effort until first green run).
+- QSF: NUM_PARALLEL_PROCESSORS ALL, EDA sim-tool None (kills the 45 MB
+  synth/simulation per compile), router/placer effort multipliers 4.0 +
+  ROUTER_TIMING_OPTIMIZATION_LEVEL MINIMUM (routing-failure toolbox),
+  AUTO_RESOURCE_SHARING ON (applied, LE-neutral). **A/B verdict:
+  `OPTIMIZATION_TECHNIQUE Area`/`AREA` is SILENTLY IGNORED for this
+  MAX 10 project (report stays Balanced, netlist bit-identical at
+  53,200 both spellings) — verified dead end, removed from the qsf; LE
+  relief must come from the RTL levers, not synthesis settings.**
+  Docs truth fixes: README/DEMO say the demo is BLOCKED (routing), not
+  "pending"; OOO.md got a superseded-in-part banner (memory model is
+  D020/D021 now); VERIFICATION.md: five layers, coverage + diagnostics
+  sections. `docs/book/` gitignored; `mlp-board-demo` pushed to origin
+  (it existed only on this laptop).
+
+**Next**: (1) **the shrink decisions, now a bundle** — present design
+options for gshare-PHT→M9K **and** PRF→M9K (LVT) **and** IQ payload
+split (audit §1 has evidence + arithmetic); implement after Hanna picks,
+lockstep-verify each. (2) Recompile `mlp-board-demo` after the shrink →
+flash → **on-board MNIST demo** (demo video!). (3) 2-stage pipelined
+scheduler after the fabric has room. (4) Small Hanna-gated fixes from
+the audit: SW-switch 2-flop sync, hazard-unit uses_rs2 stall fix (free
+in-order IPC), JALR target adder, KEY0 .data link-assert, NPU on-board
+error patterns. (5) Deferred infra: parallel suite refactor (make -j),
+FENCE/ECALL/EBREAK + NPU-region random modes, X-state randomization
+lane. **Env note:** the two old landmines (riscv-gcc TMP form, silent
+Verilator misbuilds) are now GUARDED IN THE MAKEFILE — `make` just
+works; if overriding, VERILATOR_ROOT must be `/ucrt64/share/verilator`
+(mount form).

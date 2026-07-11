@@ -24,6 +24,22 @@ set_global_assignment -name INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH E
 # only — no functional or pin impact.
 set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
+# Routing-congestion toolbox (audit 2026-07-11): the D023 fit fails on
+# ROUTABILITY with huge timing margin (+6.3 ns at 16.67 MHz), so tell the
+# router to prioritize route completion over timing margin, and give the
+# placer/router more iterations. Compile-time cost only.
+set_global_assignment -name ROUTER_TIMING_OPTIMIZATION_LEVEL MINIMUM
+set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0
+set_global_assignment -name ROUTER_EFFORT_MULTIPLIER 4.0
+# Area knobs (audit 2026-07-11), A/B'd vs the balanced baseline:
+# AUTO_RESOURCE_SHARING applies cleanly (LE-neutral here, kept — free on
+# future RTL). OPTIMIZATION_TECHNIQUE Area/AREA is SILENTLY IGNORED by
+# quartus_map for this MAX 10 project (report stays "Balanced", netlist
+# bit-identical at 53,200 LEs both spellings) — verified dead end, do
+# not re-add.
+set_global_assignment -name AUTO_RESOURCE_SHARING ON
+# Use all 16 host threads (was silently capping at 10 with a warning).
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
 set_global_assignment -name DEVICE 10M50DAF484C7G
 set_global_assignment -name TOP_LEVEL_ENTITY de10_top
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 20.1.1
@@ -31,8 +47,10 @@ set_global_assignment -name LAST_QUARTUS_VERSION "20.1.1 Lite Edition"
 set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
 set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
 set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
-set_global_assignment -name EDA_SIMULATION_TOOL "ModelSim-Altera (SystemVerilog)"
-set_global_assignment -name EDA_OUTPUT_DATA_FORMAT "SYSTEMVERILOG HDL" -section_id eda_simulation
+# EDA netlist generation OFF (audit 2026-07-11): the project simulates
+# only with Verilator; ModelSim netlist export burned compile time and
+# 45 MB of synth/simulation/ per compile for nothing.
+set_global_assignment -name EDA_SIMULATION_TOOL "<None>"
 set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
 set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
 set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
