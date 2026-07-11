@@ -454,6 +454,56 @@ regress-isa: $(RUN_BIN) $(RVT_HEX)
 	    $$pass $$((pass+fail)); \
 	[ $$fail -eq 0 ]
 
+# --- RTL line coverage (audit 2026-07-11: a promised roadmap deliverable) -----
+# Separate coverage-instrumented builds (line coverage only — toggle
+# coverage on 48k LEs of RTL is noise). `make coverage` runs the directed
+# + ISA suites on BOTH cores, merges the per-test .dat files, and prints
+# the combined RTL line-coverage percentage (also written to
+# build/cov/coverage.info in lcov format for annotation tools).
+COV_BIN     := obj_dir_cov/V$(TOP)
+COV_BIN_OOO := obj_dir_cov_ooo/V$(OOO_TOP)
+
+$(COV_BIN): $(RTL_SRCS) $(SIM_MAIN) tb/verilator/iss.h
+	@$(CHECK_VROOT)
+	$(VERILATOR) $(VFLAGS) --coverage-line --Mdir obj_dir_cov \
+	    $(RTL_SRCS) $(SIM_MAIN) -o V$(TOP)
+
+$(COV_BIN_OOO): $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) tb/verilator/iss.h
+	@$(CHECK_VROOT)
+	$(VERILATOR) $(VFLAGS) --coverage-line --top-module $(OOO_TOP) \
+	    --Mdir obj_dir_cov_ooo -CFLAGS -DOOO_TOP \
+	    $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) -o V$(OOO_TOP)
+
+coverage: $(COV_BIN) $(COV_BIN_OOO) $(SW_TESTS) $(CTEST_HEX) $(RVT_HEX)
+	@mkdir -p build/cov && rm -f build/cov/*.dat
+	@n=0; fail=0; \
+	for h in $(SW_TESTS); do \
+	  ./$(COV_BIN) +imem=$$h +covout=build/cov/io_$$n.dat >/dev/null || fail=$$((fail+1)); \
+	  ./$(COV_BIN_OOO) +imem=$$h +covout=build/cov/oo_$$n.dat >/dev/null || fail=$$((fail+1)); \
+	  n=$$((n+1)); \
+	done; \
+	for c in sw/ctests/*.c; do b=$${c%.c}; \
+	  ./$(COV_BIN) +imem=$$b.text.hex +dmem=$$b.data.hex +max_cycles=2000000 \
+	      +covout=build/cov/ioc_$$n.dat >/dev/null || fail=$$((fail+1)); \
+	  ./$(COV_BIN_OOO) +imem=$$b.text.hex +dmem=$$b.data.hex +max_cycles=2000000 \
+	      +covout=build/cov/ooc_$$n.dat >/dev/null || fail=$$((fail+1)); \
+	  n=$$((n+1)); \
+	done; \
+	for s in $(RVT_DIR)/rv32ui/*.S; do b=$${s%.S}; \
+	  ./$(COV_BIN) +imem=$$b.text.hex +dmem=$$b.data.hex \
+	      +covout=build/cov/ioi_$$n.dat >/dev/null || fail=$$((fail+1)); \
+	  ./$(COV_BIN_OOO) +imem=$$b.text.hex +dmem=$$b.data.hex \
+	      +covout=build/cov/ooi_$$n.dat >/dev/null || fail=$$((fail+1)); \
+	  n=$$((n+1)); \
+	done; \
+	echo "coverage: $$n programs run per core, $$fail failures"; \
+	[ $$fail -eq 0 ]
+	verilator_coverage --write-info build/cov/coverage.info build/cov/*.dat
+	@awk -F: '/^DA:/ { split($$2,a,","); tot++; if (a[2]>0) hit++ } \
+	  END { printf "coverage: RTL line coverage %d/%d = %.1f%% (both cores, directed+ctests+ISA suites)\n", \
+	        hit, tot, 100.0*hit/tot }' build/cov/coverage.info
+.PHONY: coverage
+
 # Umbrella: everything that must be green before merging to main
 verify: regress regress-isa regress-rand
 
