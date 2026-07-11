@@ -33,7 +33,9 @@ module ooo_cpu #(
     input  wire clk,
     input  wire reset,
     output wire [9:0] leds,
-    input  wire [9:0] switches
+    input  wire [9:0] switches,
+    // 7-segment digits, raw active-low segments via MMIO (D023)
+    output wire [7:0] hex0, hex1, hex2, hex3, hex4, hex5
 );
 
 `include "ooo_pkg.vh"
@@ -1008,7 +1010,9 @@ module ooo_cpu #(
         .raddr(p2_addr), .rdata(mmio_rdata),
         .waddr(mw_addr), .wdata(mw_data),
         .we(mw_fire && mw_isio),
-        .leds(leds_mmio), .switches(switches)
+        .leds(leds_mmio), .switches(switches),
+        .hex0 (hex0), .hex1 (hex1), .hex2 (hex2),
+        .hex3 (hex3), .hex4 (hex4), .hex5 (hex5)
     );
     assign leds = leds_mmio;
 

@@ -1,3 +1,21 @@
+// ============================================================================
+// mmio — memory-mapped I/O block (IO region = addr[31:28] == 4)
+//
+// Map (word access only):
+//   0x4000_0000  RW  LEDs        [9:0]
+//   0x4000_0004  R   switches    [9:0]
+//   0x4000_0008  W   test-end    (harness protocol, no register here)
+//   0x4000_000C  RW  HEXLO       {HEX3,HEX2,HEX1,HEX0} raw segment bytes
+//   0x4000_0010  W   sim console (harness protocol, no register here)
+//   0x4000_0014  RW  HEXHI       {16'b0,HEX5,HEX4}     raw segment bytes
+//
+// HEX registers (D023): each byte drives one 7-segment digit directly,
+// bit i = segment i, bit 7 = decimal point. The board's displays are
+// ACTIVE-LOW (0 lights a segment) and the hardware does NOT invert or
+// decode — software owns the font (sw/common/rv32.h). Reset value is
+// all-ones = every segment dark. Both HEX registers read back what was
+// written so the ISS can lockstep-compare them like any other state.
+// ============================================================================
 module mmio(
     input  wire        clk,
     input  wire        reset,
@@ -14,41 +32,58 @@ module mmio(
 
     // Physical FPGA hardware
     output reg  [9:0]  leds,      // LED register (writeable)
-    input  wire [9:0]  switches   // Switch register (read-only)
+    input  wire [9:0]  switches,  // Switch register (read-only)
+    output wire [7:0]  hex0,      // 7-seg digits, raw active-low segments
+    output wire [7:0]  hex1,
+    output wire [7:0]  hex2,
+    output wire [7:0]  hex3,
+    output wire [7:0]  hex4,
+    output wire [7:0]  hex5
 );
 
+    reg [31:0] hexlo;             // {HEX3,HEX2,HEX1,HEX0}
+    reg [15:0] hexhi;             // {HEX5,HEX4}
+
     // ---------------------------------------------------------
-    // LED Register (Memory-Mapped Output)
-    // ---------------------------------------------------------
-    // On reset → clear LEDs.
-    // On write → if the CPU writes to address 0x4000_0000,
-    // update the bottom 10 bits of the LED register.
+    // Write side. On reset LEDs clear and every display goes dark
+    // (active-low segments -> all-ones). CPU stores update the
+    // addressed register; unmapped IO addresses are ignored.
     // ---------------------------------------------------------
     always @(posedge clk or posedge reset) begin
         if (reset) begin
-            leds <= 10'b0;
-        end else begin
-            if (we && waddr == 32'h40000000) begin
-                leds <= wdata[9:0];
-            end
+            leds  <= 10'b0;
+            hexlo <= 32'hFFFFFFFF;
+            hexhi <= 16'hFFFF;
+        end else if (we) begin
+            case (waddr)
+                32'h40000000: leds  <= wdata[9:0];
+                32'h4000000C: hexlo <= wdata;
+                32'h40000014: hexhi <= wdata[15:0];
+                default: ;                       // test-end/console: harness-only
+            endcase
         end
     end
 
+    assign hex0 = hexlo[7:0];
+    assign hex1 = hexlo[15:8];
+    assign hex2 = hexlo[23:16];
+    assign hex3 = hexlo[31:24];
+    assign hex4 = hexhi[7:0];
+    assign hex5 = hexhi[15:8];
+
     // ---------------------------------------------------------
     // Memory-Mapped Read Logic (Combinational)
-    // ---------------------------------------------------------
-    // 0x4000_0000 → read LED register
-    // 0x4000_0004 → read switch values
-    // Anything else → return zero
+    // Every readable register reads back its live value; anything
+    // else returns zero.
     // ---------------------------------------------------------
     always @(*) begin
-        if (raddr == 32'h40000000) begin
-            rdata = {22'b0, leds};        // zero-extend LED bits
-        end else if (raddr == 32'h40000004) begin
-            rdata = {22'b0, switches};    // zero-extend switch bits
-        end else begin
-            rdata = 32'b0;                // unmapped address
-        end
+        case (raddr)
+            32'h40000000: rdata = {22'b0, leds};      // zero-extend LED bits
+            32'h40000004: rdata = {22'b0, switches};  // zero-extend switch bits
+            32'h4000000C: rdata = hexlo;
+            32'h40000014: rdata = {16'b0, hexhi};
+            default:      rdata = 32'b0;              // unmapped address
+        endcase
     end
 
 endmodule

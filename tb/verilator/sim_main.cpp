@@ -127,7 +127,16 @@ int main(int argc, char** argv) {
     };
 
     // --- reset ----------------------------------------------------------
-    top->switches = 0;
+    // +sw=<n> drives the board switches (D023: the MLP board demo selects
+    // its test image on SW[2:0]). The ISS mirrors the same value so
+    // switch-dependent programs stay lockstep-comparable.
+    uint32_t sw_val = 0;
+    {
+        const char* arg = ctx->commandArgsPlusMatch("sw=");
+        if (arg && arg[0]) sw_val = (uint32_t)strtoul(arg + 4, nullptr, 0);
+    }
+    top->switches = sw_val & 0x3FF;
+    iss->switches = sw_val & 0x3FF;
     top->reset = 1;
     for (int i = 0; i < 4; ++i) { half_tick(0); half_tick(1); }
     top->reset = 0;
