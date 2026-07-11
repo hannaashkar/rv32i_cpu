@@ -411,10 +411,20 @@ since D019; .sof rebuilt with the OoO core + store-set predictor at
 - **NOT yet on silicon: no USB-Blaster was connected** (`quartus_pgm -l`:
   no JTAG hardware) — flashing is Hanna's step, see Next.
 
-**Next**: (1) **Flash the D022 `.sof`** (board + USB cable → `quartus_pgm
--m jtag -o "p;output_files/rv32i_cpu.sof"` in `synth/`) and confirm the LED
-walker steps at 16.67 MHz — the walk itself is the bank/crossbar acceptance
-test. (2) **MLP memory sizing branch** (imem ≥ 2048 words — MLP text is
+**2026-07-11** — **D022 HARDWARE-CONFIRMED on the DE10-Lite.** Hanna
+flashed `output_files/rv32i_cpu.sof` herself via the Quartus Programmer GUI
+(guided walkthrough; USB-Blaster JTAG) and the self-paced LED walker runs
+live — the OoO core (store-set predictor, banked even/odd M9K imem, block-
+RAM dmem) executing from MIF-initialized M9Ks at 16.67 MHz. The walk is the
+bank/crossbar acceptance test: every fetch crosses the parity crossbar, so
+a steady walk = banked imem + ERAM config mode proven on silicon. First
+OoO-core bitstream on the board since the 7.14 MHz D018 experiment, and the
+first ever with M9K-resident code. B006 is now closed end-to-end
+(sim → STA → silicon).
+
+**Next**: (1) **Push `main`** (D021 `a83502a` + D022 `8875c2c` are still
+local-only — Hanna's step) and consider tagging (e.g. `v4.0-ooo-fpga`).
+(2) **MLP memory sizing branch** (imem ≥ 2048 words — MLP text is
 1,272 — and dmem ~13k words with MIF-initialized weights; the D022 ERAM
 mode + altsyncram recipe now makes dmem init possible too) → on-board MNIST
 demo. (3) The 2-stage pipelined scheduler (to beat in-order on HW; needs
