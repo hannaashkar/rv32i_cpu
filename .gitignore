@@ -1,4 +1,5 @@
 # Quartus build artifacts
+synth/.mif_prog_stamp
 synth/db/
 synth/incremental_db/
 synth/output_files/
@@ -40,6 +41,9 @@ sw/coremark/.cm_flags_stamp
 # docs/NPU.md for the mirror URLs. weights.h (the training OUTPUT) is
 # checked in; the raw dataset is not.
 sw/npu_mlp/data/
+
+# Generated project book (PDF/HTML) — regenerable artifact, keep out of git history
+docs/book/
 
 # Editor / backup noise
 *.bak

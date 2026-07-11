@@ -19,10 +19,37 @@
 # --- toolchain (see CLAUDE.md "Environment") --------------------------------
 VERILATOR     ?= verilator
 XPACK_BIN     ?= /c/Users/ASUS/tools/xpack-riscv-none-elf-gcc-15.2.0-1/bin
-RISCV_GCC     ?= $(XPACK_BIN)/riscv-none-elf-gcc
 RISCV_OBJCOPY ?= $(XPACK_BIN)/riscv-none-elf-objcopy
 PYTHON        ?= /c/Users/ASUS/AppData/Local/Programs/Python/Python312/python.exe
 QUARTUS_MAP   ?= /c/intelfpga_lite/20.1/quartus/bin64/quartus_map.exe
+QUARTUS_FIT   ?= /c/intelfpga_lite/20.1/quartus/bin64/quartus_fit.exe
+QUARTUS_STA   ?= /c/intelfpga_lite/20.1/quartus/bin64/quartus_sta.exe
+
+# --- environment landmine guards (audit 2026-07-11) ---------------------------
+# Landmine 1: xpack riscv-gcc invoked from MSYS make tries to create its
+# temp files in C:\WINDOWS\ unless TMP/TEMP reach it in Windows backslash
+# form AT THE RECIPE LEVEL (exported shell variables do not survive into
+# the native tool). Bake the fix into the gcc invocation itself.
+WINTMP    ?= C:\Users\ASUS\AppData\Local\Temp
+RISCV_GCC ?= TMP='$(WINTMP)' TEMP='$(WINTMP)' $(XPACK_BIN)/riscv-none-elf-gcc
+
+# Landmine 2: under MSYS2 a Verilator build with VERILATOR_ROOT unset
+# SILENTLY produces a broken model (wrong include root). Default to the
+# known install when it exists. The value MUST be the MSYS mount form
+# (/ucrt64/...): the /c/Users/... spelling of the same directory is
+# rejected by verilator as "set to inconsistent path".
+MSYS_VROOT := /ucrt64/share/verilator
+ifeq ($(origin VERILATOR_ROOT),undefined)
+  ifneq ($(wildcard $(MSYS_VROOT)),)
+    export VERILATOR_ROOT := $(MSYS_VROOT)
+  endif
+endif
+define CHECK_VROOT
+if [ -z "$$VERILATOR_ROOT" ]; then case "$$(uname -s)" in MSYS*|MINGW*) \
+  echo 'ERROR: VERILATOR_ROOT is unset - Verilator silently mis-builds under MSYS2.'; \
+  echo '  fix: export VERILATOR_ROOT=/ucrt64/share/verilator'; \
+  exit 1;; esac; fi
+endef
 
 # --- design ------------------------------------------------------------------
 TOP       := cpu_pipeline
@@ -96,17 +123,23 @@ all: test
 sim: $(SIM_BIN)
 
 $(SIM_BIN): $(RTL_SRCS) $(SIM_MAIN) tb/verilator/iss.h
+	@$(CHECK_VROOT)
 	$(VERILATOR) $(VFLAGS) $(RTL_SRCS) $(SIM_MAIN) -o V$(TOP)
 
 sim-ooo: $(SIM_BIN_OOO)
 
+# NOTE: string-compare via cat, NOT cmp — diffutils is not installed in
+# the MSYS2 environment, so `... | cmp -s -` exited 127 and REWROTE the
+# stamp every run, silently re-verilating the OoO model on every build
+# invocation (found by the 2026-07-11 audit follow-up).
 obj_dir_ooo/.ooo_flags_stamp: FORCE
 	@mkdir -p obj_dir_ooo
-	@echo '$(LOAD_POLICY) $(VDEFS)' | cmp -s - $@ 2>/dev/null \
+	@[ "$$(cat $@ 2>/dev/null)" = '$(LOAD_POLICY) $(VDEFS)' ] \
 	    || echo '$(LOAD_POLICY) $(VDEFS)' > $@
 
 $(SIM_BIN_OOO): $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) tb/verilator/iss.h \
                 obj_dir_ooo/.ooo_flags_stamp
+	@$(CHECK_VROOT)
 	$(VERILATOR) $(VFLAGS) $(VDEFS) --top-module $(OOO_TOP) --Mdir obj_dir_ooo \
 	    $(OOO_GFLAGS) -CFLAGS -DOOO_TOP \
 	    $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) -o V$(OOO_TOP)
@@ -117,6 +150,7 @@ NPU_TB := obj_dir_npu/Vnpu_top
 NPU_SRCS := rtl/npu/npu_pe.v rtl/npu/npu_array.v rtl/npu/npu_top.v
 
 $(NPU_TB): $(NPU_SRCS) tb/verilator/npu_tb.cpp
+	@$(CHECK_VROOT)
 	$(VERILATOR) --cc --exe --build -j 0 --top-module npu_top \
 	    --Mdir obj_dir_npu -Wno-fatal \
 	    -MAKEFLAGS OPT_FAST=-O2 -MAKEFLAGS OPT_SLOW=-O2 \
@@ -136,6 +170,7 @@ STSET_AW ?= 6
 STSET_TB := obj_dir_stset/Vooo_stset
 
 $(STSET_TB): rtl/ooo/ooo_stset.v tb/verilator/stset_tb.cpp
+	@$(CHECK_VROOT)
 	$(VERILATOR) --cc --exe --build -j 0 --top-module ooo_stset \
 	    --Mdir obj_dir_stset -Wno-fatal -GDECAY_W=8 -GSSIT_AW=$(STSET_AW) \
 	    -CFLAGS -DTB_SSIT_AW=$(STSET_AW) \
@@ -186,13 +221,20 @@ MIF_TEXT := sw/npu_mlp/mlp_board.text.hex
 MIF_DATA := sw/npu_mlp/mlp_board.data.hex
 endif
 
-$(MIF_EVEN): $(MIF_TEXT) scripts/hex2mif.py
+# Stale-program guard (audit 2026-07-11): the MIF targets depend on
+# WHICH program MIF_PROG selects, not just on file mtimes — without this
+# stamp, `make mif MIF_PROG=demo` after an mlp build says "up to date"
+# and the board silently ships the wrong program.
+synth/.mif_prog_stamp: FORCE
+	@[ "$$(cat $@ 2>/dev/null)" = '$(MIF_PROG)' ] || echo '$(MIF_PROG)' > $@
+
+$(MIF_EVEN): $(MIF_TEXT) scripts/hex2mif.py synth/.mif_prog_stamp
 	$(PYTHON) scripts/hex2mif.py $< $(MIF_EVEN) $(MIF_ODD) \
 	    --depth-words $(IMEM_DEPTH) --pad 0x00000013 --check
 
 $(MIF_ODD): $(MIF_EVEN) ;
 
-$(MIF_DMEM): $(MIF_DATA) scripts/hex2mif.py
+$(MIF_DMEM): $(MIF_DATA) scripts/hex2mif.py synth/.mif_prog_stamp
 	$(PYTHON) scripts/hex2mif.py $< $(MIF_DMEM) --single \
 	    --depth-words $(DMEM_DEPTH) --pad 0 --check
 
@@ -253,7 +295,7 @@ CM_FLAGS = $(SW_CFLAGS) $(CM_OPT) -ffreestanding \
 # CM_ITER/CM_OPT change even though no source file did: the stamp file
 # records the last-built flags and only changes when they do.
 $(CM_DIR)/.cm_flags_stamp: FORCE
-	@echo '$(CM_ITER) $(CM_OPT)' | cmp -s - $@ 2>/dev/null \
+	@[ "$$(cat $@ 2>/dev/null)" = '$(CM_ITER) $(CM_OPT)' ] \
 	    || echo '$(CM_ITER) $(CM_OPT)' > $@
 FORCE:
 
@@ -267,7 +309,7 @@ $(CM_DIR)/coremark.elf: $(CM_SRCS) $(CM_DIR)/coremark.h \
 # of iteration count, unlike "Correct operation validated" which also
 # requires the >=10s rule to be satisfied (CM_ITER >= 600 here).
 coremark: $(RUN_BIN) $(CM_DIR)/coremark.text.hex $(CM_DIR)/coremark.data.hex
-	./$(RUN_BIN) +imem=$(CM_DIR)/coremark.text.hex \
+	set -o pipefail; ./$(RUN_BIN) +imem=$(CM_DIR)/coremark.text.hex \
 	    +dmem=$(CM_DIR)/coremark.data.hex \
 	    +max_cycles=900000000 | tee coremark.log
 	@grep -Eq 'crclist.*0xe714'  coremark.log && \
@@ -320,9 +362,11 @@ test: $(RUN_BIN) $(SW_TESTS)
 	./$(RUN_BIN) +imem=$(PROG)
 
 # Run every assembly test in sw/tests and every C test in sw/ctests
+# NOTE: iterate $(SW_TESTS) (derived from the .S sources), NOT the .hex
+# glob — a stale .hex from a deleted/renamed test must not keep "passing".
 regress: $(RUN_BIN) $(SW_TESTS) $(CTEST_HEX)
 	@pass=0; fail=0; \
-	for h in sw/tests/*.hex; do \
+	for h in $(SW_TESTS); do \
 	  if out=$$(./$(RUN_BIN) +imem=$$h); then \
 	    pass=$$((pass+1)); printf 'PASS  %s\n' "$$h"; \
 	  else \
@@ -413,6 +457,11 @@ regress-isa: $(RUN_BIN) $(RVT_HEX)
 # Umbrella: everything that must be green before merging to main
 verify: regress regress-isa regress-rand
 
+# The suite targets are recipes, not files: without .PHONY a stray file
+# named e.g. "regress" would silently skip the entire suite (the -ooo
+# aliases were protected; the base targets were not — audit 2026-07-11).
+.PHONY: regress regress-rand regress-rand-vio regress-isa verify coremark
+
 # --- OoO core aliases: identical suites, second binary ------------------------
 regress-ooo:
 	$(MAKE) regress RUN_BIN=$(SIM_BIN_OOO)
@@ -436,8 +485,34 @@ wave: $(RUN_BIN)
 	@echo "waveform written to sim.fst"
 
 # --- synthesis sanity check -------------------------------------------------------
+# LE-budget gate (audit 2026-07-11): the old error-count-only gate is the
+# exact gate that missed the D020 capacity blowout (103% LEs discovered a
+# branch later). A&S "Total logic elements" is pre-packing: history says
+# ~53,004 still fitted (97%, D022) and 53,200 failed ROUTING (D023), so
+# the default budget is deliberately below both. Override: LE_BUDGET=nnn
+# (0 disables the check). A red gate here means "will not fit the 10M50",
+# not "RTL is broken" — map errors still fail on their own.
+LE_BUDGET ?= 52000
 synth-check:
 	cd synth && $(QUARTUS_MAP) rv32i_cpu
+	@les=$$(sed -n 's/^Total logic elements : \([0-9,]*\).*/\1/p' \
+	       synth/output_files/rv32i_cpu.map.summary | tr -d ,); \
+	[ -n "$$les" ] || { echo 'synth-check: could not parse LE count from map.summary'; exit 1; }; \
+	echo "synth-check: A&S total logic elements = $$les (budget $(LE_BUDGET), device 49760)"; \
+	if [ $(LE_BUDGET) -gt 0 ] && [ $$les -gt $(LE_BUDGET) ]; then \
+	  echo "synth-check: OVER LE BUDGET ($$les > $(LE_BUDGET)) — capacity regression (D020/D021 lesson)"; \
+	  exit 1; \
+	fi
+
+# Full fit + STA with archived critical paths — the board top's actual
+# critical path was never recorded before (only ad-hoc synth_sta*/ runs
+# of the bare core). Writes output_files/critical_paths.rpt.
+synth-fit: synth-check
+	cd synth && $(QUARTUS_FIT) rv32i_cpu
+
+synth-sta:
+	cd synth && $(QUARTUS_STA) -t ../scripts/sta_paths.tcl rv32i_cpu
+.PHONY: synth-fit synth-sta
 
 clean:
 	rm -rf obj_dir obj_dir_ooo obj_dir_npu obj_dir_stset sim.fst
