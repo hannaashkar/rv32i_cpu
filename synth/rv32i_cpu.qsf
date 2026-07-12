@@ -16,6 +16,30 @@ set_global_assignment -name FAMILY "MAX 10"
 # altsyncram; the misleading B006 message on inferred RAM). Config-flash
 # layout only; JTAG .sof programming and the pin assignments are untouched.
 set_global_assignment -name INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH ERAM"
+# Fitter effort (D023): the 64 KB dmem spreads ~64 M9Ks across the die and
+# their buses must route through a 97%-full fabric. The default Auto Fit
+# SKIPS routability optimizations ("Optimizations were skipped to reduce
+# compilation time") and left 817 signals unrouted; these two settings are
+# Quartus's documented answer to exactly that failure. Compile-time cost
+# only — no functional or pin impact.
+set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
+# Routing-congestion toolbox (audit 2026-07-11): the D023 fit fails on
+# ROUTABILITY with huge timing margin (+6.3 ns at 16.67 MHz), so tell the
+# router to prioritize route completion over timing margin, and give the
+# placer/router more iterations. Compile-time cost only.
+set_global_assignment -name ROUTER_TIMING_OPTIMIZATION_LEVEL MINIMUM
+set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0
+set_global_assignment -name ROUTER_EFFORT_MULTIPLIER 4.0
+# Area knobs (audit 2026-07-11), A/B'd vs the balanced baseline:
+# AUTO_RESOURCE_SHARING applies cleanly (LE-neutral here, kept — free on
+# future RTL). OPTIMIZATION_TECHNIQUE Area/AREA is SILENTLY IGNORED by
+# quartus_map for this MAX 10 project (report stays "Balanced", netlist
+# bit-identical at 53,200 LEs both spellings) — verified dead end, do
+# not re-add.
+set_global_assignment -name AUTO_RESOURCE_SHARING ON
+# Use all 16 host threads (was silently capping at 10 with a warning).
+set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL
 set_global_assignment -name DEVICE 10M50DAF484C7G
 set_global_assignment -name TOP_LEVEL_ENTITY de10_top
 set_global_assignment -name ORIGINAL_QUARTUS_VERSION 20.1.1
@@ -23,8 +47,10 @@ set_global_assignment -name LAST_QUARTUS_VERSION "20.1.1 Lite Edition"
 set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files
 set_global_assignment -name MIN_CORE_JUNCTION_TEMP 0
 set_global_assignment -name MAX_CORE_JUNCTION_TEMP 85
-set_global_assignment -name EDA_SIMULATION_TOOL "ModelSim-Altera (SystemVerilog)"
-set_global_assignment -name EDA_OUTPUT_DATA_FORMAT "SYSTEMVERILOG HDL" -section_id eda_simulation
+# EDA netlist generation OFF (audit 2026-07-11): the project simulates
+# only with Verilator; ModelSim netlist export burned compile time and
+# 45 MB of synth/simulation/ per compile for nothing.
+set_global_assignment -name EDA_SIMULATION_TOOL "<None>"
 set_global_assignment -name POWER_PRESET_COOLING_SOLUTION "23 MM HEAT SINK WITH 200 LFPM AIRFLOW"
 set_global_assignment -name POWER_BOARD_THERMAL_MODEL "NONE (CONSERVATIVE)"
 set_global_assignment -name PARTITION_NETLIST_TYPE SOURCE -section_id Top
@@ -81,7 +107,71 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[6]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[7]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[8]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[9]
-set_instance_assignment -name IO_STANDARD "3.3 V SCHMITT TRIGGER" -to KEY
+# (The redundant unindexed `-to KEY` IO_STANDARD line was removed
+# 2026-07-11 with Hanna's approval — KEY[0]/KEY[1] above already carry
+# it, and the duplicate caused Warning 171167 "ignored invalid Fitter
+# assignments" on every fit. No location assignment was touched.)
+
+# ----------------------------------------------------------------------------
+# 7-segment displays HEX0-HEX5 (D023, ADDED 2026-07-11 with Hanna's approval;
+# every pre-existing pin above is untouched). Pin map verified against the
+# Terasic DE10-Lite reference qsf (two independent sources); bit 7 = decimal
+# point. Displays are active-low; the CPU drives raw segments via MMIO.
+# ----------------------------------------------------------------------------
+set_location_assignment PIN_C14 -to HEX0[0]
+set_location_assignment PIN_E15 -to HEX0[1]
+set_location_assignment PIN_C15 -to HEX0[2]
+set_location_assignment PIN_C16 -to HEX0[3]
+set_location_assignment PIN_E16 -to HEX0[4]
+set_location_assignment PIN_D17 -to HEX0[5]
+set_location_assignment PIN_C17 -to HEX0[6]
+set_location_assignment PIN_D15 -to HEX0[7]
+set_location_assignment PIN_C18 -to HEX1[0]
+set_location_assignment PIN_D18 -to HEX1[1]
+set_location_assignment PIN_E18 -to HEX1[2]
+set_location_assignment PIN_B16 -to HEX1[3]
+set_location_assignment PIN_A17 -to HEX1[4]
+set_location_assignment PIN_A18 -to HEX1[5]
+set_location_assignment PIN_B17 -to HEX1[6]
+set_location_assignment PIN_A16 -to HEX1[7]
+set_location_assignment PIN_B20 -to HEX2[0]
+set_location_assignment PIN_A20 -to HEX2[1]
+set_location_assignment PIN_B19 -to HEX2[2]
+set_location_assignment PIN_A21 -to HEX2[3]
+set_location_assignment PIN_B21 -to HEX2[4]
+set_location_assignment PIN_C22 -to HEX2[5]
+set_location_assignment PIN_B22 -to HEX2[6]
+set_location_assignment PIN_A19 -to HEX2[7]
+set_location_assignment PIN_F21 -to HEX3[0]
+set_location_assignment PIN_E22 -to HEX3[1]
+set_location_assignment PIN_E21 -to HEX3[2]
+set_location_assignment PIN_C19 -to HEX3[3]
+set_location_assignment PIN_C20 -to HEX3[4]
+set_location_assignment PIN_D19 -to HEX3[5]
+set_location_assignment PIN_E17 -to HEX3[6]
+set_location_assignment PIN_D22 -to HEX3[7]
+set_location_assignment PIN_F18 -to HEX4[0]
+set_location_assignment PIN_E20 -to HEX4[1]
+set_location_assignment PIN_E19 -to HEX4[2]
+set_location_assignment PIN_J18 -to HEX4[3]
+set_location_assignment PIN_H19 -to HEX4[4]
+set_location_assignment PIN_F19 -to HEX4[5]
+set_location_assignment PIN_F20 -to HEX4[6]
+set_location_assignment PIN_F17 -to HEX4[7]
+set_location_assignment PIN_J20 -to HEX5[0]
+set_location_assignment PIN_K20 -to HEX5[1]
+set_location_assignment PIN_L18 -to HEX5[2]
+set_location_assignment PIN_N18 -to HEX5[3]
+set_location_assignment PIN_M20 -to HEX5[4]
+set_location_assignment PIN_N19 -to HEX5[5]
+set_location_assignment PIN_N20 -to HEX5[6]
+set_location_assignment PIN_L19 -to HEX5[7]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to HEX0[*]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to HEX1[*]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to HEX2[*]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to HEX3[*]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to HEX4[*]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to HEX5[*]
 
 # ----------------------------------------------------------------------------
 # RTL sources (synthesizable only — testbenches live in ../tb)

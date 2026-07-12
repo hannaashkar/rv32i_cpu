@@ -2,7 +2,13 @@ module de10_top (
     input  wire        CLOCK_50,   // 50 MHz base clock from the DE10 board
     input  wire [1:0]  KEY,        // push buttons (KEY[0] used as reset)
     input  wire [9:0]  SW,         // switches routed to the CPU
-    output wire [9:0]  LEDR        // LEDs driven by the CPU via MMIO
+    output wire [9:0]  LEDR,       // LEDs driven by the CPU via MMIO
+    output wire [7:0]  HEX0,       // 7-segment digits (D023), active-low
+    output wire [7:0]  HEX1,       //   segments driven raw by the CPU via
+    output wire [7:0]  HEX2,       //   MMIO 0x4000000C / 0x40000014 —
+    output wire [7:0]  HEX3,       //   software owns the font, bit 7 = DP
+    output wire [7:0]  HEX4,
+    output wire [7:0]  HEX5
 );
 
     // ======================================================
@@ -54,7 +60,9 @@ module de10_top (
         .clk      (cpu_clk),
         .reset    (reset),
         .leds     (LEDR),    // LEDs are fully driven by the CPU via MMIO
-        .switches (SW)
+        .switches (SW),
+        .hex0 (HEX0), .hex1 (HEX1), .hex2 (HEX2),
+        .hex3 (HEX3), .hex4 (HEX4), .hex5 (HEX5)
     );
 
 endmodule

@@ -43,6 +43,8 @@ public:
     uint32_t mscratch;
     uint32_t leds;                                   // MMIO LED register
     uint32_t switches;                               // MMIO switch inputs
+    uint32_t hexlo;                                  // MMIO 7-seg {HEX3..HEX0}
+    uint32_t hexhi;                                  // MMIO 7-seg {HEX5,HEX4}
     uint32_t imem[DEPTH_WORDS];
     uint32_t dmem[DEPTH_WORDS];
 
@@ -78,6 +80,8 @@ public:
         mscratch = 0;
         leds     = 0;
         switches = 0;
+        hexlo    = 0xFFFFFFFFu;                      // reset = all dark (D023)
+        hexhi    = 0x0000FFFFu;
         for (uint32_t i = 0; i < DEPTH_WORDS; ++i) imem[i] = 0x00000013; // NOP
         memset(dmem, 0, sizeof(dmem));
         memset(npu_a, 0, sizeof(npu_a));
@@ -109,6 +113,8 @@ public:
     uint32_t mmio_read(uint32_t addr) const {
         if (addr == 0x40000000u) return leds & 0x3FF;
         if (addr == 0x40000004u) return switches & 0x3FF;
+        if (addr == 0x4000000Cu) return hexlo;               // D023 7-seg
+        if (addr == 0x40000014u) return hexhi & 0xFFFFu;
         return 0;
     }
 
@@ -248,7 +254,9 @@ public:
             eff.st_data   = b;
             eff.st_funct3 = funct3;
             if (is_io(addr)) {
-                if (addr == 0x40000000u) leds = b & 0x3FF; // full word, any size
+                if (addr == 0x40000000u) leds  = b & 0x3FF; // full word, any size
+                if (addr == 0x4000000Cu) hexlo = b;         // D023 7-seg
+                if (addr == 0x40000014u) hexhi = b & 0xFFFFu;
             } else if (is_npu(addr)) {
                 npu_write(addr, b);                        // full word too
             } else {

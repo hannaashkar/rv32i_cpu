@@ -1,6 +1,6 @@
 # Verification strategy
 
-The verification stack has three independent stimulus layers, all of them
+The verification stack has five independent stimulus layers, all of them
 checked by the same **golden-model lockstep co-simulation** — so every
 test contributes checking at every retired instruction, not just at its
 final CHECK.
@@ -39,6 +39,28 @@ modeled exactly; a quirk is architecture once documented.
 `make verify` = regress + regress-isa + regress-rand. `make verify-ooo` adds
 `regress-rand-vio` (the LQ recovery path). All green is the merge gate for
 `main`.
+
+## Coverage (measured 2026-07-11)
+
+`make coverage` builds line-coverage-instrumented models of BOTH cores,
+runs the directed + C + ISA suites on each (59 programs per core),
+merges the per-test data, and prints the combined figure. Current:
+
+- **RTL line coverage: 99.0% (1338/1351 lines)**, both cores combined.
+- Merged lcov data lands in `build/cov/coverage.info` for annotation.
+- The uncovered tail is dominated by decode paths no test executes yet
+  (FENCE / ECALL / EBREAK / reserved opcodes) — a known gap on the
+  audit list, closed by adding them to the random mix once decided.
+
+## Divergence diagnostics
+
+On any lockstep mismatch the harness prints, besides the mismatching
+instruction: the last 64 retired instructions (cycle, pc, writeback,
+store), a full ISS architectural register dump, and a pointer to
+`+trace_at=<cycle>` — which opens the FST only at the given cycle, so a
+divergence 90M instructions into CoreMark gets a usable waveform window
+on the second run. `+force_diverge=<n>` is a permanent TB self-test that
+fires the whole path on demand (verified on both cores).
 
 ## Exclusions (documented, not hidden)
 

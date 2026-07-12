@@ -1,0 +1,2 @@
+// empty dmem image — programs with no initialized data (e.g. the LED
+// walker) get an all-zero dmem.mif; hex2mif pads to the full depth.

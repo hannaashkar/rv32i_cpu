@@ -33,7 +33,9 @@ module ooo_cpu #(
     input  wire clk,
     input  wire reset,
     output wire [9:0] leds,
-    input  wire [9:0] switches
+    input  wire [9:0] switches,
+    // 7-segment digits, raw active-low segments via MMIO (D023)
+    output wire [7:0] hex0, hex1, hex2, hex3, hex4, hex5
 );
 
 `include "ooo_pkg.vh"
@@ -150,9 +152,22 @@ module ooo_cpu #(
     wire        dtrain_en;
     wire [31:0] dtrain_pc, dtrain_target;
 
+    // D024: the exact value pcF will hold after this edge — a mirror of
+    // the pcF priority mux in the F/D always block below (keep the two
+    // in sync; INV-G1 inside gshare_bp fatals on any divergence). Feeds
+    // the banked PHT's address registers so direction predictions stay
+    // same-cycle.
+    wire [31:0] npc0 = reset          ? 32'b0
+                     : lq_flush_start ? rob_pc[h0]
+                     : lq_flushing    ? pcF
+                     : restore_en     ? restore_npc
+                     : dec_redirect   ? dec_redirect_pc
+                     : fd_accept      ? fetch_npc
+                     :                  pcF;
+
     gshare_bp BP0 (
         .clk(clk), .reset(reset),
-        .pc0(pc0), .pc1(pc1),
+        .pc0(pc0), .pc1(pc1), .npc0(npc0),
         .hit0(bt_hit0), .cond0(bt_cond0), .dir0(bt_dir0), .target0(bt_tgt0),
         .hit1(bt_hit1), .cond1(bt_cond1), .dir1(bt_dir1), .target1(bt_tgt1),
         .ghr_out(ghr_now),
@@ -1008,7 +1023,9 @@ module ooo_cpu #(
         .raddr(p2_addr), .rdata(mmio_rdata),
         .waddr(mw_addr), .wdata(mw_data),
         .we(mw_fire && mw_isio),
-        .leds(leds_mmio), .switches(switches)
+        .leds(leds_mmio), .switches(switches),
+        .hex0 (hex0), .hex1 (hex1), .hex2 (hex2),
+        .hex3 (hex3), .hex4 (hex4), .hex5 (hex5)
     );
     assign leds = leds_mmio;
 

@@ -5,6 +5,135 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D024 — 2026-07-12 — gshare PHT → even/odd banked M9K (branch `gshare-m9k-pht`)
+
+**Context:** the 2026-07-11 audit's per-entity fit table showed
+`gshare_bp` = 11,137 LCs, the #1 (tied) LE pig, blocking the D023 board
+demo at 96% routing congestion. The BTB arrays were ALREADY M9K (Quartus
+retimes the pc-only read address into the RAM); the LCs were all PHT-side,
+because the PHT read index `pc[11:2]^ghr` is a combinational function of
+two registers with no address register to retime — so Quartus kept the
+1024×2 array in fabric and DUPLICATED it per read port (~4k of the 5,926
+predictor registers).
+
+**Options (docs/GSHARE_SHRINK.md):** A = banked sync-read M9K PHT
+(recommended), B = pipeline the direction one stage (rejected: a bubble on
+every predicted-taken branch), C = shrink the fabric PHT to 256 entries
+(fallback, more aliasing). **Hanna chose A1** (gshare-only scope, deferring
+PRF/IQ).
+
+**Key insight that made A clean:** for a fetch pair (pc, pc+4), the two PHT
+indices always differ in bit 0 (+4 flips pc[2]; the xor with ghr[0] flips
+both parities equally), so slot0/slot1 never collide in banks split on
+`pidx[0]` — the exact D022 imem_banked even/odd argument, applied to the
+PHT. Two 512×2 M9K banks, bank address = `pidx[9:1]`, output crossbar on
+the registered parity.
+
+**Read timing (kills A1's "blind first slot" compromise):** the banks'
+address registers pre-load the NEXT cycle's indices, computed from `npc0`
+— a mirror of the pcF priority mux in ooo_cpu (reset / lq_flush /
+restore / dec_redirect / fd_accept / hold) — and `ghr_nx`, this module's
+own GHR next-value. Predictions therefore stay same-cycle on EVERY path
+including redirects, so no post-redirect slot ever goes blind. INV-G1
+($fatal) re-derives the read index from the live pc/ghr each cycle and
+catches any pcF path the mirror misses.
+
+**Training:** 2-phase read-modify-write on each bank's port B (read `tidx`,
+write ±1 next cycle) with a 1-deep skid queue per bank; sustained
+1 train/cycle alternating banks, 1 per 2 cycles same bank, excess events
+dropped (counted `tr_drops`). Predictor state is a hint, never
+architecturally visible, so a dropped update is an accuracy detail, not a
+correctness issue — which is why lockstep stays exact.
+
+**Sim/synth arms:** behavioral banks (read-first NBA) mirror the
+altsyncram BIDIR_DUAL_PORT config with `OLD_DATA` mixed-port RDW; PHT
+power-up = weak-not-taken from `synth/pht_init.mif` (checked in) / the
+behavioral `initial`. PHT contents deliberately survive KEY0 warm reset
+(MIF loads at configuration only; a warm-trained PHT is still valid — BTB
+valids and the GHR still reset).
+
+**Verification:** INV-G1 (read-index timing) + INV-G2 (a flat replay-
+shadow that catches crossbar-polarity / bank-routing bugs the
+architecturally-invisible predictor would otherwise hide — the data-path
+check, mirroring imem_banked's INV-F1), both armed every cycle of every
+test. OoO 19/19 + 40/40 riscv-tests + 25/25 random + 25/25 `--vio`,
+lockstep-clean. **CoreMark IPC 1.026 KEPT** (421.8M cyc, official CRCs,
+432.8M instructions lockstep-verified) — identical to the pre-D024
+baseline, confirming prediction accuracy is unchanged; hello.c 1989 →
+2013 cyc (+1.2%, the train-latency + drop cost). Adversarial review
+(3 lenses): 3 minor findings, zero live bugs.
+
+**Result: A&S 53,200 → 46,620 LEs (−6,580, 12.4% of the device freed),
+registers 18,976 → 16,995**, PHT now in 2 M9Ks. The budget gate passes.
+
+**BOARD FIT UNBLOCKED (the whole point):** the D023 MNIST-demo top —
+which failed to route at 96% LEs on 2026-07-11 (817 / 1,415 unrouted
+conflicts, two placements, called structural) — now **FITS: 43,609 /
+49,760 LEs (88%), Fitter Successful, 0 errors.** Timing MET at the
+16.67 MHz board clock with **+16.8 ns slack** (Restricted Fmax
+23.16 MHz — actually UP from D019's ~19.65, because removing the async
+PHT read/update cloud shortened the frontend; the new limiter is the
+dmem-load → rob_poison LQ path from D020). `.sof` built. NOT yet on
+silicon — flashing needs the USB-Blaster (Hanna's step). This confirms
+the audit's core thesis: the LE relief had to come from the RTL (PHT →
+M9K), not synthesis settings.
+
+## D023 — 2026-07-11 — MLP memory sizing + 7-segment display path: the on-board MNIST demo (branch `mlp-board-demo`)
+
+**Context:** D022 put the board back in business but the memories were demo-
+sized (4 KB imem / 1 KB dmem); the MNIST MLP needs ~5 KB of code and ~50 KB
+of data (weights dominate). The D022 ERAM recipe made initialized M9K
+possible for the first time — this branch applies it to dmem, which is what
+makes a data-carrying board program possible at all (there is no loader;
+.data must be in the RAM at power-up).
+
+**Hanna's calls (AskUserQuestion):** result display on the **7-segment
+displays** (HEX pins added to the qsf — first pin additions since the
+original build; verified against two independent DE10-Lite references,
+additive only), **8 test images** selected with SW[2:0], and **64 KB dmem**
+(round power of two over a tight fit — M9K headroom is plentiful).
+
+**Memory sizing (rtl/mem/dmem.v, imem_banked.v):** synthesis defaults grew
+to imem 2048 words (8 KB) / dmem 16384 words (64 KB). dmem's SYNC_READ arm
+now instantiates an **explicit altsyncram in simple-dual-port mode** (port
+A = byte-enabled write, port B = registered-address read) initialized from
+`synth/dmem.mif` — explicit because MAX 10 refuses MIF init on any inferred
+RAM (B006/D022). `read_during_write_mode_mixed_ports("OLD_DATA")` pins the
+one observable RDW corner to the behavioral arm's nonblocking semantics.
+The behavioral (Verilator) arm is bit-identical to before; the byte-enable
+write logic is shared verbatim between both arms, so sim-vs-silicon
+divergence in the write path is structurally impossible.
+
+**MMIO HEX registers (rtl/soc/mmio.v):** 0x4000000C = {HEX3..HEX0},
+0x40000014 = {HEX5,HEX4}; one raw ACTIVE-LOW segment byte per digit, bit 7
+= decimal point, reset = all dark. Hardware does not decode digits — the
+font lives in software (sw/common/rv32.h) — keeping the RTL a pure 48-bit
+register. Both registers read back and are ISS-mirrored (iss.h), so every
+HEX access in every test is lockstep-compared; directed test
+sw/tests/hex_mmio.S covers reset values, readback, the HEXHI 16-bit
+truncation, and neighbor isolation.
+
+**Board program (sw/npu_mlp/mlp_board.c + sw/common/link_board.ld):**
+NPU-only classify (one image in systolic column 0), reusing weights.h
+verbatim — the 8 demo images are the first 8 of the 32 already-vendored
+test images, so no new data was added. Phase 1 self-test classifies all 8
+vs the offline numpy integer reference and stores to MMIO_SIM_EXIT: the
+Verilator harness ends there (this IS the sim regression), the board
+ignores it and enters phase 2 — read SW[2:0], classify, display
+[image# | label | prediction] on HEX5/HEX2/HEX0, LEDR9 = correct.
+link_board.ld mirrors the real memory sizes (8 KB/64 KB) so exceeding the
+board is a LINK error, not silent address aliasing. Program text: 489
+words of 2048; data: 12,696 words of 16,384.
+
+**Verified:** regress 19/19 (incl. hex_mmio) + riscv-tests 40/40 + random
+25/25 on the in-order core; 19/19 + 40/40 + 25/25 + 25/25 --vio on the
+OoO core — all lockstep-clean. Board demo self-test: PASS on both cores,
+8/8 images correct (in-order 687,018 cyc IPC 0.817; OoO 376,112 cyc IPC
+1.492 — ~23 ms per full self-test at 16.67 MHz). Quartus full-compile
+numbers: see the status entry / BASELINE notes for this branch.
+
+---
+
 ## D022 — 2026-07-10 — imem → even/odd banked M9K ROM + the real B006 root cause (MAX 10 ERAM config mode); the board top FITS again (48,153 LEs / 97%), .sof restored
 
 **Context:** the D021 board finding — `de10_top` no longer fit the 10M50

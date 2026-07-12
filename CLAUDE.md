@@ -424,16 +424,134 @@ first ever with M9K-resident code. B006 is now closed end-to-end
 MAX 10 internal flash (CFM) — the board boots the CPU standalone on
 power-up, no PC needed.
 
-**Next**: (1) **Push `main`** (D021 `a83502a` + D022 `8875c2c` are still
-local-only — Hanna's step) and consider tagging (e.g. `v4.0-ooo-fpga`).
-(2) **MLP memory sizing branch** (imem ≥ 2048 words — MLP text is
-1,272 — and dmem ~13k words with MIF-initialized weights; the D022 ERAM
-mode + altsyncram recipe now makes dmem init possible too) → on-board MNIST
-demo. (3) The 2-stage pipelined scheduler (to beat in-order on HW; needs
-~42 MHz) remains a separate future project; `gshare_bp`'s 9.4k LEs (PHT →
-M9K) is the companion area lever. (4) Optional: store-set telemetry CSR
-(violation counter) for on-board measurement. **Env note:** riscv-gcc under MSYS make
-needs TMP/TEMP/TMPDIR passed as **make variables** in **backslash** Windows
-form (else `Cannot create temporary file in C:\WINDOWS\`); exported shell
-vars don't reach the recipe. Verilator builds SILENTLY FAIL without
-`VERILATOR_ROOT=…/ucrt64/share/verilator` exported.
+**2026-07-11 (later)** — everything pushed (origin/main `2082aab`, plus
+branches `ooo-store-set`/`imem-m9k`); `.pof` confirmed in CFM (standalone
+boot). **D023 MLP board demo built on branch `mlp-board-demo` (NOT
+merged): design + software COMPLETE and sim-verified; board bitstream
+BLOCKED by routing congestion — parked pending the gshare shrink.**
+- Contents (6 commits): dmem 64 KB explicit altsyncram simple-dual-port
+  M9K with MIF init (the D022 ERAM recipe applied to RAM; byte-enabled
+  writes shared verbatim with the behavioral arm; OLD_DATA mixed-port
+  RDW), imem 2048 words, HEX0-5 7-seg MMIO path end-to-end (0x4000000C/
+  0x40000014, raw active-low segment bytes, font in sw; qsf pins ADDED —
+  verified vs two independent DE10-Lite references; .sdc false-paths),
+  ISS mirrors + `+sw=` plusarg, `sw/npu_mlp/mlp_board.c` (self-test on 8
+  images = the sim regression, then switch-driven HEX demo loop),
+  `link_board.ld` (8 KB/64 KB link-time fit guard), `make mif` emits the
+  MLP images (dmem.mif checked in; `MIF_PROG=demo` restores the walker).
+- **Verified:** regress 19/19 (new `hex_mmio.S`) + 40/40 + 25/25 both
+  cores (+25/25 `--vio` OoO), lockstep-clean; demo self-test 8/8 both
+  cores (in-order 687,018 cyc IPC 0.817; OoO 376,112 cyc IPC 1.492 —
+  the OoO does the same work in 1.83× fewer cycles; ~2.8 ms/inference at
+  16.67 MHz, sim-measured). README fact-harvested + adversarially
+  verified (6 findings fixed, incl. a per-inference latency mislabel and
+  two on-silicon overclaims); docs/DEMO.md added.
+- **Board compile FAILED twice — routing, not resources:** LEs 47,865/
+  49,760 (96%, below D022!), M9K 75/182 (41%, dmem = 64 blocks correctly
+  MIF-initialized), but the router left 817 (attempt 1, Auto Fit) / 1,415
+  (attempt 2, STANDARD FIT + FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION
+  ALWAYS — settings committed) interconnect conflicts unresolved. Two
+  different placements both un-routable ⇒ structural, not seed luck: a
+  96%-full fabric can't route buses to 64 scattered dmem M9Ks.
+- **Hanna's call: don't force the demo now.** The real fix is the known
+  LE pig — `gshare_bp` 9,354 LEs (19% of the device) of async-read
+  fabric tables → M9K. That frees routing slack for this demo AND the
+  future 2-stage scheduler. Predictor redesign = Hanna's microarchitecture
+  (sync-read retiming via read-with-next-pc, same-cycle read/train RDW
+  semantics); Claude presents design options first, per the rules.
+
+**2026-07-11 (night) — FULL-PROJECT AUDIT + INFRA HARDENING BATCH**
+(7 commits on `mlp-board-demo`, pushed; **docs/AUDIT-2026-07-11.md is the
+audit report AND the continuation roadmap — live checkboxes, owners,
+evidence — read it before picking the next task**):
+- **Audit headline (from the failed fit's per-entity table, first time
+  read): there are TWO LE pigs, not one — `ooo_prf` 10,947 LCs (6R/3W
+  64×32 async-read PRF) ≈ `gshare_bp` 11,137 LCs; together 44% of the
+  device. And the BTB data arrays are ALREADY M9K in this build (0 LCs)
+  — gshare's LCs are PHT-side, so the shrink design must target the PHT
+  read/update path, not the BTB.** Tier-2 area levers (all Hanna calls):
+  IQ payload split (~3k), checkpoint slimming (~1-3k), payload-array
+  async-reset removal. Timing: D022's 18.64 MHz was an Auto-Fit floor
+  (timing opts skipped); JALR rides the full shifter cone (~10 ns
+  recoverable via dedicated target adder); PLL /2=25 MHz unreachable now
+  — 20-22 MHz fractional is the honest post-shrink step.
+- **Infra batch landed + verified (19/19 + 40/40 + 5/5-rand lockstep,
+  BOTH cores):** Makefile landmine guards (VERILATOR_ROOT must be the
+  MOUNT form `/ucrt64/share/verilator` — the `/c/...` spelling is
+  REJECTED as "inconsistent path"; TMP/TEMP baked into the RISCV_GCC
+  invocation); **new bug found: `cmp` is not installed in MSYS2, so all
+  `echo | cmp -s -` stamps rewrote every run — the OoO model had been
+  silently RE-VERILATING ON EVERY BUILD** (fixed via cat-compare);
+  `make mif` stale-trap fixed (MIF_PROG switch now invalidates — before,
+  the board could silently ship the WRONG program); `synth-check` gained
+  an LE-budget gate (52,000 default; proven firing at the current
+  53,200); new `synth-fit`/`synth-sta` + `scripts/sta_paths.tcl` archive
+  the top-20 critical paths per compile; .PHONY fixes; stale-hex-glob
+  fix; coremark pipefail.
+- **Verification upgrades:** lockstep divergence diagnostics (64-entry
+  retired ring buffer + full ISS register dump on every mismatch path;
+  `+trace_at=<cyc>` late-opened FST for long runs; `+force_diverge=<n>`
+  permanent self-test — verified exit-3 dumps on both cores).
+  **`make coverage` = the roadmap's promised coverage deliverable:
+  measured 99.0% RTL line coverage (1338/1351, both cores, 59 programs
+  each)**; uncovered tail = the FENCE/ECALL/EBREAK paths no test
+  executes (audit finding). First CI: `.github/workflows/ci.yml`
+  (best-effort until first green run).
+- QSF: NUM_PARALLEL_PROCESSORS ALL, EDA sim-tool None (kills the 45 MB
+  synth/simulation per compile), router/placer effort multipliers 4.0 +
+  ROUTER_TIMING_OPTIMIZATION_LEVEL MINIMUM (routing-failure toolbox),
+  AUTO_RESOURCE_SHARING ON (applied, LE-neutral). **A/B verdict:
+  `OPTIMIZATION_TECHNIQUE Area`/`AREA` is SILENTLY IGNORED for this
+  MAX 10 project (report stays Balanced, netlist bit-identical at
+  53,200 both spellings) — verified dead end, removed from the qsf; LE
+  relief must come from the RTL levers, not synthesis settings.**
+  Docs truth fixes: README/DEMO say the demo is BLOCKED (routing), not
+  "pending"; OOO.md got a superseded-in-part banner (memory model is
+  D020/D021 now); VERIFICATION.md: five layers, coverage + diagnostics
+  sections. `docs/book/` gitignored; `mlp-board-demo` pushed to origin
+  (it existed only on this laptop).
+
+**2026-07-12 — AUDIT QUICK FIXES + D024 gshare→M9K SHRINK → MNIST DEMO
+BITSTREAM BUILDS** (branch `gshare-m9k-pht`; 4 quick-fix commits + D024
+`f98d6ff`; the earlier audit-infra batch + 4 quick fixes were on
+`mlp-board-demo`, pushed):
+- **4 Hanna-approved quick fixes:** hazard `uses_rs1/uses_rs2` qualifier
+  (measured negligible — CoreMark −0.002%, it's a decode-correctness
+  cleanup not a perf win); mmio 2-flop SW-switch synchronizer;
+  `link_board.ld` ASSERT(.data/.sdata empty) KEY0 warm-reset guard;
+  deleted the redundant unindexed `-to KEY` qsf line. All verified,
+  suites green both cores.
+- **D024 (Hanna picked A1): gshare PHT → even/odd banked M9K.** The
+  #1-tied LE pig (11,137 LCs, all PHT-side — BTB was already M9K).
+  Two 512×2 M9K banks split on `pidx[0]` (pc+4 flips pc[2] → the two
+  fetch indices always differ in bit0 = the D022 imem even/odd trick on
+  the PHT); banks' address regs pre-load next-cycle indices from `npc0`
+  (a mirror of the pcF priority mux) so predictions stay same-cycle on
+  every path — A1's "blind first post-redirect slot" proved unnecessary.
+  2-phase RMW train w/ 1-deep skid (drops counted, hint-only). INV-G1
+  (index timing) + INV-G2 (flat replay-shadow = data-path check like
+  imem's INV-F1) armed. **A&S 53,200 → 46,620 LEs (−6,580); CoreMark
+  IPC 1.026 KEPT (official CRCs, 432.8M instr lockstep-clean); OoO
+  19/19+40/40+25/25+25/25-vio green; hello 1989→2013.** Adversarial
+  review (9 agents/3 lenses): 3 minor, 0 live bug, all addressed.
+- **THE PAYOFF — MNIST DEMO BITSTREAM NOW BUILDS:** the D023 top that
+  failed to route at 96% LEs (structural, 2 placements) now **FITS:
+  43,609/49,760 LEs (88%), Fitter Successful 0 errors, timing MET at
+  16.67 MHz with +16.8 ns slack** (Restricted Fmax 23.16 MHz — UP from
+  D019's 19.65 because the async PHT cloud left the frontend; new
+  limiter = dmem-load→rob_poison LQ path). **`.sof` built.** NOT yet on
+  silicon — flashing needs the USB-Blaster (Hanna's step).
+
+**Next**: (1) **Flash the MNIST demo** (`output_files/rv32i_cpu.sof` via
+Quartus Programmer + USB-Blaster) → on-board digit recognition → demo
+video. Also program the `.pof` for standalone boot. (2) Remaining audit
+levers if more room/speed wanted (all Hanna's calls): PRF→M9K LVT
+(~10k LEs), IQ payload split, 2-stage pipelined scheduler (the fabric
+now has room — 88%), JALR target adder (~10 ns off the LQ-path limiter).
+(3) Small Hanna-gated fixes: NPU on-board error patterns. (4) Deferred
+infra: parallel suite refactor (make -j), FENCE/ECALL/EBREAK +
+NPU-region random modes, X-state randomization lane, INV-G2 negative
+self-test. **Env note:** the two old landmines are GUARDED IN THE
+MAKEFILE — `make` just works; if overriding, VERILATOR_ROOT must be
+`/ucrt64/share/verilator` (mount form). `gshare-m9k-pht` NOT merged —
+pending Hanna's review + the flash confirmation.

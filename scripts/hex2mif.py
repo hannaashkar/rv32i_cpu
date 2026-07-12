@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Split a flat $readmemh program image into even/odd bank MIF files (D022).
+"""Split a flat $readmemh program image into even/odd bank MIF files (D022),
+or emit one flat MIF with --single (D023, for the dmem data image).
 
 The banked M9K instruction ROM (rtl/mem/imem_banked.v) holds word i in bank
 (i & 1) at bank address (i >> 1) — even words in imem_even.mif, odd words in
 imem_odd.mif. This convention is stated verbatim in the RTL header; keep the
-two in sync.
+two in sync. dmem (rtl/mem/dmem.v) is a single unbanked RAM, hence --single.
 
 Input:  $readmemh format as scripts/bin2hex.py emits it — one 8-hex-digit
         32-bit little-endian word per line; blank lines and '//' comments
@@ -111,23 +112,44 @@ def read_mif(path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("hex_in", help="flat $readmemh image (bin2hex.py output)")
-    ap.add_argument("mif_even", help="output MIF for even words (word 0,2,4,...)")
-    ap.add_argument("mif_odd", help="output MIF for odd words (word 1,3,5,...)")
+    ap.add_argument("mif_even", help="output MIF for even words (word 0,2,4,...)"
+                    " — with --single: the one output MIF")
+    ap.add_argument("mif_odd", nargs="?", default=None,
+                    help="output MIF for odd words (omit with --single)")
+    ap.add_argument("--single", action="store_true",
+                    help="no banking: emit the whole image as one MIF (dmem)")
     ap.add_argument("--depth-words", type=int, default=1024,
-                    help="total imem depth in words (default 1024 = 4 KB)")
+                    help="total memory depth in words (default 1024 = 4 KB)")
     ap.add_argument("--pad", type=lambda s: int(s, 0), default=0x00000013,
                     help="fill value for unused words (default NOP 0x00000013)")
     ap.add_argument("--check", action="store_true",
                     help="re-parse the emitted MIFs and verify the round trip")
     args = ap.parse_args()
 
-    if args.depth_words % 2:
+    if args.single == (args.mif_odd is not None):
+        sys.exit("pass exactly one output with --single, exactly two without")
+    if not args.single and args.depth_words % 2:
         sys.exit("--depth-words must be even (two equal banks)")
     prog = read_hex(args.hex_in)
     if len(prog) > args.depth_words:
-        sys.exit(f"{args.hex_in}: {len(prog)} words exceeds imem depth "
+        sys.exit(f"{args.hex_in}: {len(prog)} words exceeds memory depth "
                  f"{args.depth_words}")
     image = prog + [args.pad] * (args.depth_words - len(prog))
+
+    if args.single:
+        write_mif(args.mif_even, image, args.pad, args.hex_in, len(prog))
+        if args.check:
+            back = read_mif(args.mif_even)
+            if back != image:
+                bad = next(i for i, (a, b) in enumerate(zip(back, image))
+                           if a != b)
+                sys.exit(f"check FAILED: word {bad}: mif={back[bad]:08x} "
+                         f"hex={image[bad]:08x}")
+            print(f"hex2mif: {len(prog)} data words -> {args.mif_even} "
+                  f"({args.depth_words} words), round-trip check OK")
+        else:
+            print(f"hex2mif: {len(prog)} data words -> {args.mif_even}")
+        return
 
     even = image[0::2]
     odd = image[1::2]

@@ -1,4 +1,5 @@
 # Quartus build artifacts
+synth/.mif_prog_stamp
 synth/db/
 synth/incremental_db/
 synth/output_files/
@@ -41,6 +42,9 @@ sw/coremark/.cm_flags_stamp
 # checked in; the raw dataset is not.
 sw/npu_mlp/data/
 
+# Generated project book (PDF/HTML) — regenerable artifact, keep out of git history
+docs/book/
+
 # Editor / backup noise
 *.bak
 *.orig
@@ -53,5 +57,7 @@ obj_dir_ooo_cons/
 obj_dir_npu/
 obj_dir_probe/
 obj_dir_stset/
+obj_dir_cov/
+obj_dir_cov_ooo/
 synth/simulation/
 ruvector.db

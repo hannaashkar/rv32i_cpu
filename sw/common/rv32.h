@@ -14,9 +14,20 @@
 #define MMIO_LEDS        (*(volatile uint32_t *)0x40000000u)
 #define MMIO_SWITCHES    (*(volatile uint32_t *)0x40000004u)
 #define MMIO_SIM_EXIT    (*(volatile uint32_t *)0x40000008u) // 1=PASS, else fail
+#define MMIO_HEXLO       (*(volatile uint32_t *)0x4000000Cu) // {HEX3..HEX0} D023
 #define MMIO_SIM_CONSOLE (*(volatile uint32_t *)0x40000010u) // sim putchar
+#define MMIO_HEXHI       (*(volatile uint32_t *)0x40000014u) // {HEX5,HEX4}  D023
 // SIM_EXIT and SIM_CONSOLE are harness conventions: the Verilator TB snoops
 // the store bus for these addresses; mmio.v ignores them (no-op on FPGA).
+
+// 7-segment font, one byte per digit: raw ACTIVE-LOW segments (0 lights),
+// bit i = segment i (a..g), bit 7 = decimal point (kept dark). The hardware
+// register drives the pins verbatim — this table IS the display encoding.
+#define HEX_BLANK 0xFFu
+static const uint8_t hex_font[10] = {
+    0xC0, 0xF9, 0xA4, 0xB0, 0x99,   // 0 1 2 3 4
+    0x92, 0x82, 0xF8, 0x80, 0x90    // 5 6 7 8 9
+};
 
 // --- performance counters ----------------------------------------------------
 static inline uint32_t rdcycle(void) {

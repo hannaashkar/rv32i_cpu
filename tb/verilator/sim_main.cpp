@@ -17,6 +17,12 @@
 //   +imem=<file.hex>    program to load (one 32-bit hex word per line)
 //   +max_cycles=<N>     hang guard, default 100000
 //   +trace              dump FST waveform to sim.fst (Surfer / GTKWave)
+//   +trace_at=<N>       open the FST only at cycle N — a usable waveform
+//                       window for divergences deep into long runs
+//                       (tracing from cycle 0 is infeasible at 500M cycles)
+//   +force_diverge=<N>  TB self-test: flag the N-th compared instruction
+//                       as a mismatch to exercise the divergence
+//                       diagnostics (ring buffer + register dump)
 // ============================================================================
 #include <cstdio>
 #include <cstdint>
@@ -43,6 +49,9 @@ typedef Vcpu_pipeline TopModel;
 #endif
 #include "verilated.h"
 #include "verilated_fst_c.h"
+#if VM_COVERAGE
+#include "verilated_cov.h"
+#endif
 
 #include "iss.h"
 
@@ -87,6 +96,34 @@ int main(int argc, char** argv) {
         if (arg && arg[0]) verbose = true;
     }
 
+    // Late-window tracing: the trace must be REGISTERED before the first
+    // eval, but dumping starts only when the target cycle arrives — FST
+    // from cycle 0 is infeasible for a divergence 90M instructions in.
+    uint64_t trace_at = 0;  // 0 = disabled
+    bool trace_wait = false;
+    {
+        const char* arg = ctx->commandArgsPlusMatch("trace_at=");
+        if (arg && arg[0]) {
+            trace_at = strtoull(arg + strlen("+trace_at="), nullptr, 0);
+            if (trace_at && !tfp) {
+                ctx->traceEverOn(true);
+                tfp = std::make_unique<VerilatedFstC>();
+                top->trace(tfp.get(), 99);
+                tfp->open("sim.fst");
+                trace_wait = true;
+                printf("[sim] tracing to sim.fst from cycle %llu\n",
+                       (unsigned long long)trace_at);
+            }
+        }
+    }
+    uint64_t force_diverge = 0;
+    {
+        const char* arg = ctx->commandArgsPlusMatch("force_diverge=");
+        if (arg && arg[0])
+            force_diverge = strtoull(arg + strlen("+force_diverge="),
+                                     nullptr, 0);
+    }
+
     // --- golden-model lockstep ------------------------------------------
     // Default ON whenever a program is loaded via +imem; +nolockstep
     // disables it (e.g. for programs that intentionally diverge).
@@ -119,15 +156,58 @@ int main(int argc, char** argv) {
     std::deque<StoreEvt> iss_stores;   // OoO: stream-compared vs commits
     uint64_t compared = 0;
 
+    // --- divergence diagnostics (audit 2026-07-11) ------------------------
+    // A 64-entry ring of the last retired instructions plus a full ISS
+    // register dump, printed on any lockstep mismatch — the old single
+    // mismatch line was unusable 90M instructions into a CoreMark run.
+    struct RetEvt {
+        uint64_t cycle; uint32_t pc, val, sa, sd; uint8_t rd; bool wr, st;
+    };
+    static const int RING_N = 64;
+    RetEvt ring[RING_N]; int ring_n = 0, ring_w = 0;
+    auto ring_push = [&](const RetEvt& ev) {
+        ring[ring_w] = ev; ring_w = (ring_w + 1) % RING_N;
+        if (ring_n < RING_N) ++ring_n;
+    };
+    auto dump_divergence_context = [&]() {
+        printf("[lockstep] last %d retired instructions before divergence "
+               "(oldest first):\n", ring_n);
+        for (int i = 0; i < ring_n; ++i) {
+            const RetEvt& ev = ring[(ring_w - ring_n + i + RING_N) % RING_N];
+            printf("    cyc %10llu  pc=0x%08x",
+                   (unsigned long long)ev.cycle, ev.pc);
+            if (ev.wr) printf("  x%-2u <= 0x%08x", ev.rd, ev.val);
+            if (ev.st) printf("  [0x%08x] <= 0x%08x", ev.sa, ev.sd);
+            printf("\n");
+        }
+        printf("[lockstep] ISS architectural registers at divergence:\n");
+        for (int i = 0; i < 32; i += 4)
+            printf("    x%-2d=0x%08x x%-2d=0x%08x x%-2d=0x%08x "
+                   "x%-2d=0x%08x\n",
+                   i, iss->x[i], i + 1, iss->x[i + 1],
+                   i + 2, iss->x[i + 2], i + 3, iss->x[i + 3]);
+        printf("[lockstep] tip: rerun with +trace_at=<cycle> for a "
+               "waveform window around the failure.\n");
+    };
+
     uint64_t t = 0;  // trace timestamp (half-cycles)
     auto half_tick = [&](uint8_t clk) {
         top->clk = clk;
         top->eval();
-        if (tfp) tfp->dump(t++);
+        if (tfp && !trace_wait) tfp->dump(t++);
     };
 
     // --- reset ----------------------------------------------------------
-    top->switches = 0;
+    // +sw=<n> drives the board switches (D023: the MLP board demo selects
+    // its test image on SW[2:0]). The ISS mirrors the same value so
+    // switch-dependent programs stay lockstep-comparable.
+    uint32_t sw_val = 0;
+    {
+        const char* arg = ctx->commandArgsPlusMatch("sw=");
+        if (arg && arg[0]) sw_val = (uint32_t)strtoul(arg + 4, nullptr, 0);
+    }
+    top->switches = sw_val & 0x3FF;
+    iss->switches = sw_val & 0x3FF;
     top->reset = 1;
     for (int i = 0; i < 4; ++i) { half_tick(0); half_tick(1); }
     top->reset = 0;
@@ -136,6 +216,7 @@ int main(int argc, char** argv) {
     int exit_code = 1;
     uint64_t cycle = 0;
     for (cycle = 0; cycle < max_cycles; ++cycle) {
+        if (trace_wait && cycle >= trace_at) trace_wait = false;
         half_tick(0);
         half_tick(1);
 
@@ -175,6 +256,12 @@ int main(int argc, char** argv) {
                 if (e.is_store)
                     iss_stores.push_back({e.st_addr, e.st_data,
                                           e.st_funct3});
+                if (force_diverge && compared + 1 == force_diverge) {
+                    printf("\n[lockstep] +force_diverge self-test firing "
+                           "at instruction %llu\n",
+                           (unsigned long long)force_diverge);
+                    bad = true;
+                }
                 if (bad) {
                     printf("\n[lockstep] MISMATCH at cycle %llu slot %d "
                            "(%llu instructions compared)\n",
@@ -185,11 +272,15 @@ int main(int argc, char** argv) {
                     printf("  ISS: pc=0x%08x rd=x%u wr=%d val=0x%08x "
                            "instr=0x%08x\n",
                            e.pc, e.rd, (int)e.wrote_rd, e.rd_val, e.instr);
+                    dump_divergence_context();
                     if (tfp) tfp->close();
                     top->final();
                     return 3;
                 }
                 ++compared;
+                ring_push({cycle, e.pc, e.rd_val, e.st_addr, e.st_data,
+                           (uint8_t)e.rd, (bool)e.wrote_rd,
+                           (bool)e.is_store});
             }
             // drain matching store pairs (commit lags retire; two FIFOs
             // absorb the skew)
@@ -206,6 +297,7 @@ int main(int argc, char** argv) {
                            a.addr, a.data, a.funct3);
                     printf("  ISS: [0x%08x] <= 0x%08x (f3=%u)\n",
                            b.addr, b.data, b.funct3);
+                    dump_divergence_context();
                     if (tfp) tfp->close();
                     top->final();
                     return 3;
@@ -290,6 +382,12 @@ int main(int argc, char** argv) {
                             bad = true;
                     }
                 }
+                if (force_diverge && compared + 1 == force_diverge) {
+                    printf("\n[lockstep] +force_diverge self-test firing "
+                           "at instruction %llu\n",
+                           (unsigned long long)force_diverge);
+                    bad = true;
+                }
                 if (bad) {
                     printf("\n[lockstep] MISMATCH at cycle %llu "
                            "(%llu instructions compared)\n",
@@ -304,11 +402,15 @@ int main(int argc, char** argv) {
                     if (e.is_store)
                         printf("  ISS store: [0x%08x] <= 0x%08x (f3=%u)\n",
                                e.st_addr, e.st_data, e.st_funct3);
+                    dump_divergence_context();
                     if (tfp) tfp->close();
                     top->final();
                     return 3;
                 }
                 ++compared;
+                ring_push({cycle, e.pc, e.rd_val, e.st_addr, e.st_data,
+                           (uint8_t)e.rd, (bool)e.wrote_rd,
+                           (bool)e.is_store});
             }
         }
         if (r->cpu_pipeline__DOT__MemWriteM &&
@@ -356,5 +458,16 @@ int main(int argc, char** argv) {
 
     if (tfp) tfp->close();
     top->final();
+
+#if VM_COVERAGE
+    // Coverage builds (make coverage / COVERAGE=1): dump collected line
+    // coverage; +covout gives each test its own file for offline merging.
+    {
+        const char* arg = ctx->commandArgsPlusMatch("covout=");
+        const char* path = (arg && arg[0]) ? arg + strlen("+covout=")
+                                           : "coverage.dat";
+        ctx->coveragep()->write(path);
+    }
+#endif
     return exit_code;
 }

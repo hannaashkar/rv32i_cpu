@@ -1,5 +1,16 @@
 # ooo_cpu — 2-wide out-of-order core specification
 
+> **Superseded in part (2026-07-11).** This file is the D013 contract and
+> is current for rename/ROB/IQ/SQ/branch handling — but the **memory
+> model below predates D020/D021**: loads are no longer always
+> conservative. The shipping default is speculative loads with an 8-entry
+> load queue + violation CAM (`ooo_lq.v`, D020) gated by a store-set
+> memory-dependence predictor (`ooo_stset.v`, D021, `LOAD_POLICY=2`);
+> conservative mode survives as `LOAD_POLICY=0`. For the current memory
+> ordering rules read **docs/STORESET.md** and the D020/D021 entries in
+> **docs/DECISIONS.md**. Statements below about "no LQ" are the
+> historical D013 simplification, kept for the record.
+
 ## Measured result (2026-07-03, same binary as the baseline)
 
 | Metric | in-order (v1.0 tag) | **ooo_cpu** | delta |

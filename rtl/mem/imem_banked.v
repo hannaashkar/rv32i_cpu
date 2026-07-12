@@ -46,7 +46,7 @@ module imem_banked #(
 `ifdef SIM_BIG_MEM
     parameter DEPTH_WORDS = 65536,                     // 256 KB (benchmarks)
 `else
-    parameter DEPTH_WORDS = 1024,                      // 4 KB of program
+    parameter DEPTH_WORDS = 2048,                      // 8 KB of program (D023)
 `endif
     // Simulation fallback program when no +imem override is given (path
     // relative to the repo root, where the Verilator harness runs).
