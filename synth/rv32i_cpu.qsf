@@ -107,7 +107,10 @@ set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[6]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[7]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[8]
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to LEDR[9]
-set_instance_assignment -name IO_STANDARD "3.3 V SCHMITT TRIGGER" -to KEY
+# (The redundant unindexed `-to KEY` IO_STANDARD line was removed
+# 2026-07-11 with Hanna's approval — KEY[0]/KEY[1] above already carry
+# it, and the duplicate caused Warning 171167 "ignored invalid Fitter
+# assignments" on every fit. No location assignment was touched.)
 
 # ----------------------------------------------------------------------------
 # 7-segment displays HEX0-HEX5 (D023, ADDED 2026-07-11 with Hanna's approval;
