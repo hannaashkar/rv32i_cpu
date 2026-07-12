@@ -1,4 +1,15 @@
-# gshare PHT → M9K — design options (awaiting Hanna's pick)
+# gshare PHT → M9K — design options
+
+> **DECIDED 2026-07-12: Hanna picked A1** (implemented as D024, branch
+> `gshare-m9k-pht`). Implementation note: tapping `npc0` — the exact
+> pcF next-value mux, redirects included — made A1's "blind first
+> post-redirect slot" compromise UNNECESSARY: direction predictions
+> remain same-cycle on every path (enforced by INV-G1, armed in every
+> run). The delivered design's only behavioral deltas vs the fabric PHT
+> are hint-level: 2-phase train RMW (1-deep skid queue per bank, drops
+> counted), train-write visibility one cycle later, and PHT contents
+> surviving KEY0 warm reset (BTB valids + GHR still reset). See
+> DECISIONS.md D024 for results.
 
 Scope per Hanna 2026-07-12: **gshare only** (PRF/IQ shrinks deferred).
 Evidence base: the failed D023 fit's per-entity table + the 2026-07-11

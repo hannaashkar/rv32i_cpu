@@ -1,0 +1,12 @@
+-- pht_init.mif — gshare PHT bank power-up image (D024)
+-- Every 2-bit counter starts WEAK NOT-TAKEN (01), matching the old
+-- fabric PHT's reset value and the behavioral arm's initial block.
+-- Both banks (BANK_E / BANK_O in gshare_bp.v) share this file.
+-- Static and checked in: a fresh clone compiles without tooling.
+WIDTH=2;
+DEPTH=512;
+ADDRESS_RADIX=UNS;
+DATA_RADIX=BIN;
+CONTENT BEGIN
+[0..511] : 01;
+END;

@@ -15,7 +15,14 @@ localparam LQW        = 3;                // log2(LQD)
 localparam NCHKPT     = 8;                // rename checkpoints
 localparam CHKW       = 3;                // log2(NCHKPT)
 localparam GHRW       = 10;               // gshare history bits
-localparam PHTD       = 1024;             // gshare PHT entries
+// PHTD is the logical gshare PHT size. Since D024 the synthesizable PHT
+// geometry is HARDCODED in gshare_bp.v (two 512x2 M9K banks, 10-bit
+// index, DEPTH=512 in synth/pht_init.mif) — resizing the real predictor
+// means editing gshare_bp.v + the MIF together, NOT this constant. PHTD
+// drives only the INV-G2 simulation shadow; keep it equal to the real
+// 2*512 = 1024 or that self-check mis-sizes. GHRW likewise documents the
+// 10-bit GHR that gshare_bp declares directly.
+localparam PHTD       = 1024;             // gshare PHT entries (see note)
 localparam BTBD       = 64;               // BTB entries
 localparam RASD       = 8;                // return-address stack depth
 

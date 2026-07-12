@@ -5,6 +5,68 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D024 — 2026-07-12 — gshare PHT → even/odd banked M9K (branch `gshare-m9k-pht`)
+
+**Context:** the 2026-07-11 audit's per-entity fit table showed
+`gshare_bp` = 11,137 LCs, the #1 (tied) LE pig, blocking the D023 board
+demo at 96% routing congestion. The BTB arrays were ALREADY M9K (Quartus
+retimes the pc-only read address into the RAM); the LCs were all PHT-side,
+because the PHT read index `pc[11:2]^ghr` is a combinational function of
+two registers with no address register to retime — so Quartus kept the
+1024×2 array in fabric and DUPLICATED it per read port (~4k of the 5,926
+predictor registers).
+
+**Options (docs/GSHARE_SHRINK.md):** A = banked sync-read M9K PHT
+(recommended), B = pipeline the direction one stage (rejected: a bubble on
+every predicted-taken branch), C = shrink the fabric PHT to 256 entries
+(fallback, more aliasing). **Hanna chose A1** (gshare-only scope, deferring
+PRF/IQ).
+
+**Key insight that made A clean:** for a fetch pair (pc, pc+4), the two PHT
+indices always differ in bit 0 (+4 flips pc[2]; the xor with ghr[0] flips
+both parities equally), so slot0/slot1 never collide in banks split on
+`pidx[0]` — the exact D022 imem_banked even/odd argument, applied to the
+PHT. Two 512×2 M9K banks, bank address = `pidx[9:1]`, output crossbar on
+the registered parity.
+
+**Read timing (kills A1's "blind first slot" compromise):** the banks'
+address registers pre-load the NEXT cycle's indices, computed from `npc0`
+— a mirror of the pcF priority mux in ooo_cpu (reset / lq_flush /
+restore / dec_redirect / fd_accept / hold) — and `ghr_nx`, this module's
+own GHR next-value. Predictions therefore stay same-cycle on EVERY path
+including redirects, so no post-redirect slot ever goes blind. INV-G1
+($fatal) re-derives the read index from the live pc/ghr each cycle and
+catches any pcF path the mirror misses.
+
+**Training:** 2-phase read-modify-write on each bank's port B (read `tidx`,
+write ±1 next cycle) with a 1-deep skid queue per bank; sustained
+1 train/cycle alternating banks, 1 per 2 cycles same bank, excess events
+dropped (counted `tr_drops`). Predictor state is a hint, never
+architecturally visible, so a dropped update is an accuracy detail, not a
+correctness issue — which is why lockstep stays exact.
+
+**Sim/synth arms:** behavioral banks (read-first NBA) mirror the
+altsyncram BIDIR_DUAL_PORT config with `OLD_DATA` mixed-port RDW; PHT
+power-up = weak-not-taken from `synth/pht_init.mif` (checked in) / the
+behavioral `initial`. PHT contents deliberately survive KEY0 warm reset
+(MIF loads at configuration only; a warm-trained PHT is still valid — BTB
+valids and the GHR still reset).
+
+**Verification:** INV-G1 (read-index timing) + INV-G2 (a flat replay-
+shadow that catches crossbar-polarity / bank-routing bugs the
+architecturally-invisible predictor would otherwise hide — the data-path
+check, mirroring imem_banked's INV-F1), both armed every cycle of every
+test. OoO 19/19 + 40/40 riscv-tests + 25/25 random + 25/25 `--vio`,
+lockstep-clean. **CoreMark IPC 1.026 KEPT** (421.8M cyc, official CRCs,
+432.8M instructions lockstep-verified) — identical to the pre-D024
+baseline, confirming prediction accuracy is unchanged; hello.c 1989 →
+2013 cyc (+1.2%, the train-latency + drop cost). Adversarial review
+(3 lenses): 3 minor findings, zero live bugs.
+
+**Result: A&S 53,200 → 46,620 LEs (−6,580, 12.4% of the device freed),
+registers 18,976 → 16,995**, PHT now in 2 M9Ks. The budget gate passes;
+this is what unblocks the D023 board fit.
+
 ## D023 — 2026-07-11 — MLP memory sizing + 7-segment display path: the on-board MNIST demo (branch `mlp-board-demo`)
 
 **Context:** D022 put the board back in business but the memories were demo-

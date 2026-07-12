@@ -152,9 +152,22 @@ module ooo_cpu #(
     wire        dtrain_en;
     wire [31:0] dtrain_pc, dtrain_target;
 
+    // D024: the exact value pcF will hold after this edge — a mirror of
+    // the pcF priority mux in the F/D always block below (keep the two
+    // in sync; INV-G1 inside gshare_bp fatals on any divergence). Feeds
+    // the banked PHT's address registers so direction predictions stay
+    // same-cycle.
+    wire [31:0] npc0 = reset          ? 32'b0
+                     : lq_flush_start ? rob_pc[h0]
+                     : lq_flushing    ? pcF
+                     : restore_en     ? restore_npc
+                     : dec_redirect   ? dec_redirect_pc
+                     : fd_accept      ? fetch_npc
+                     :                  pcF;
+
     gshare_bp BP0 (
         .clk(clk), .reset(reset),
-        .pc0(pc0), .pc1(pc1),
+        .pc0(pc0), .pc1(pc1), .npc0(npc0),
         .hit0(bt_hit0), .cond0(bt_cond0), .dir0(bt_dir0), .target0(bt_tgt0),
         .hit1(bt_hit1), .cond1(bt_cond1), .dir1(bt_dir1), .target1(bt_tgt1),
         .ghr_out(ghr_now),
