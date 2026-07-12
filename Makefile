@@ -182,6 +182,24 @@ stset-tb: $(STSET_TB)
 	./$(STSET_TB)
 .PHONY: stset-tb
 
+# --- physical register file unit testbench (docs/PRF_SHRINK.md, D025) ---------
+# Standalone build of ooo_prf (M9K/LVT banked, folded read) vs a C++ golden
+# model = the old async register file + one-cycle read latency. ~300k random
+# read/write interleavings, every output checked every cycle.
+PRF_TB := obj_dir_prf/Vooo_prf
+
+$(PRF_TB): rtl/ooo/ooo_prf.v tb/verilator/prf_tb.cpp
+	@$(CHECK_VROOT)
+	$(VERILATOR) --cc --exe --build -j 0 --top-module ooo_prf \
+	    --Mdir obj_dir_prf -Wno-fatal \
+	    -MAKEFLAGS OPT_FAST=-O2 -MAKEFLAGS OPT_SLOW=-O2 \
+	    -MAKEFLAGS OPT_GLOBAL=-O2 -MAKEFLAGS VM_PARALLEL_BUILDS=1 \
+	    rtl/ooo/ooo_prf.v tb/verilator/prf_tb.cpp -o Vooo_prf
+
+prf-tb: $(PRF_TB)
+	./$(PRF_TB)
+.PHONY: prf-tb
+
 # --- software build ------------------------------------------------------------
 sw: $(SW_TESTS)
 
@@ -565,7 +583,7 @@ synth-sta:
 .PHONY: synth-fit synth-sta
 
 clean:
-	rm -rf obj_dir obj_dir_ooo obj_dir_npu obj_dir_stset sim.fst
+	rm -rf obj_dir obj_dir_ooo obj_dir_npu obj_dir_stset obj_dir_prf sim.fst
 	rm -f sw/tests/*.elf sw/tests/*.bin sw/tests/*.hex
 	rm -f sw/ctests/*.elf sw/ctests/*.bin sw/ctests/*.hex
 	rm -f sw/coremark/coremark.elf sw/coremark/*.bin sw/coremark/*.hex

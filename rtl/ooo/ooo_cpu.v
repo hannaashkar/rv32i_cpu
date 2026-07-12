@@ -696,11 +696,15 @@ module ooo_cpu #(
 
     // PRF
     wire [31:0] prf_r0a, prf_r0b, prf_r1a, prf_r1b, prf_r2a, prf_r2b;
+    // D025: read address = the SEL-stage (pre-flop) source tags. The PRF
+    // registers them into its M9K address ports (the fold) and into its own
+    // rtag[] compare key, so rtag == rf_u[i][PS] (rf_u <= sel_uop, uncond.)
+    // and the read data still arrives in the RF cycle. See docs/PRF_SHRINK.md.
     ooo_prf PRF0 (
-        .clk(clk),
-        .r0a_tag(rf_u[0][`U_PS1]), .r0b_tag(rf_u[0][`U_PS2]),
-        .r1a_tag(rf_u[1][`U_PS1]), .r1b_tag(rf_u[1][`U_PS2]),
-        .r2a_tag(rf_u[2][`U_PS1]), .r2b_tag(rf_u[2][`U_PS2]),
+        .clk(clk), .reset(reset),
+        .s0a_tag(sel0_uop[`U_PS1]), .s0b_tag(sel0_uop[`U_PS2]),
+        .s1a_tag(sel1_uop[`U_PS1]), .s1b_tag(sel1_uop[`U_PS2]),
+        .s2a_tag(sel2_uop[`U_PS1]), .s2b_tag(sel2_uop[`U_PS2]),
         .r0a(prf_r0a), .r0b(prf_r0b),
         .r1a(prf_r1a), .r1b(prf_r1b),
         .r2a(prf_r2a), .r2b(prf_r2b),

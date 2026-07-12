@@ -1,0 +1,11 @@
+-- ooo_prf (D025): power-up contents for the 18 banked M9K register-file
+-- blocks. All zero — a cold-started machine reads 0 for any untouched
+-- physical register, matching the old zero-init async file. Referenced by
+-- rtl/ooo/ooo_prf.v (init_file, resolved relative to the Quartus project).
+DEPTH = 64;
+WIDTH = 32;
+ADDRESS_RADIX = HEX;
+DATA_RADIX = HEX;
+CONTENT BEGIN
+[0..3F] : 00000000;
+END;
