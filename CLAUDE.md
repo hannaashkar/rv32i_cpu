@@ -547,15 +547,47 @@ origin/main = `e2a54b7`, was 2082aab). Both cores re-verified green on the
 merged tree before merge. Main now = the MNIST-demo board top with the
 banked-M9K gshare.
 
+**2026-07-12 (later) — D025 PRF → 18 banked M9K blocks via an LVT (branch
+`prf-m9k-lvt`, NOT merged; Hanna AFK, delegated the pick — chose Option A).
+NEXT.md Task 1 DONE — the audit's second (and last big) LE pig is gone.**
+- `ooo_prf` was a 6R/3W 64×32 **async-read fabric** register file
+  (10,947 LCs). Rewritten to the LaForest LVT construction: **18 M9K banks**
+  (6 read copies × 3 write banks) + a 64×2 register LVT (owner-per-reg) +
+  the **read address folded** into the M9K address regs (fed the SEL-stage
+  `sel_uop[PS]`, registered at the same edge `rf_u` latches → sync read
+  lands in the RF cycle, bit-aligned with the old async output). The RF read
+  stage never stalls, so no hold is needed (simpler than imem's B012).
+- **Bit-exact write-first over the M9K's OLD_DATA:** a DIRECT (this-cycle
+  writes) + SHADOW (registered 1-cycle-older writes) bypass rebuilds the
+  async `rd_bypass` exactly (C==W→direct, C==W+1→shadow, C≥W+2→bank via
+  LVT; single-assignment ⇒ ≤1 match; INV-P1 asserts it). dmem-style dual
+  arm (behavioral / 18 `altsyncram`), `synth/prf_zero.mif` power-up.
+- **Verified FOUR ways, all clean:** new golden-model unit TB
+  (`make prf-tb`, 300k random + directed) = async spec; full ISS lockstep
+  (OoO 19/19 + 40/40 + 25/25 + 25/25 `--vio`); **CoreMark 421,825,353 cyc /
+  IPC 1.026, official CRCs — cycle-IDENTICAL to the async baseline run
+  back-to-back on the same tree** (and hello.c 2013/1882 identical);
+  adversarial 5-lens review = 0 defects. In-order core untouched (19/19).
+- **Board fit: 43,609 → 34,714 / 49,760 LEs (88% → 70%, −8,895); registers
+  18,976 → 15,146 (−3,830); M9K 95/182 (52%, +18 banks all block RAM); fit
+  0 errors, timing MET at 16.67 MHz +17.47 ns.** Critical path UNCHANGED
+  (`dmem-load → rob_poison`, the D020 LQ CAM) — the PRF left the fabric mux
+  cone, so it is off every top-20 path (timing-neutral). docs/PRF_SHRINK.md
+  = the options sheet (A chosen; B multipump / C shrink-PHYS / D status-quo
+  considered); DECISIONS.md D025 = the record. Branch pending Hanna's review.
+
 **Next → see `docs/NEXT.md` (the start-here backlog).** In brief:
 (0) **Flash the MNIST demo** — `.sof` is built; DEFERRED by Hanna
 2026-07-12, it's her hardware step (USB-Blaster → digit demo → video).
-Do NOT auto-do. (1) PRF→M9K LVT — the other ~10k-LE pig; Claude brings an
-options sheet first. (2) 2-stage pipelined scheduler — OoO wall-clock fix
-(fabric has room at 88%). (3) JALR target adder (~10 ns off the
-dmem-load→rob_poison limiter). (4) IQ payload split (~3k LEs). (5) Small
-infra: NPU on-board error patterns, `make -j` suites, FENCE/ECALL random
-coverage, X-state lane, INV-G2 negative self-test. **Env note:** the two
-old build landmines are GUARDED IN THE MAKEFILE — `make` just works; if
-overriding, VERILATOR_ROOT must be `/ucrt64/share/verilator` (mount form). `gshare-m9k-pht` NOT merged —
-pending Hanna's review + the flash confirmation.
+Do NOT auto-do. (1) ~~PRF→M9K LVT~~ **DONE (D025, branch `prf-m9k-lvt`,
+−8,895 LEs → 70%, IPC-neutral; pending Hanna's review).** (2) 2-stage
+pipelined scheduler — OoO wall-clock fix; **now the top area lever is gone,
+the fabric has even more room (70%)** and this is the biggest remaining win.
+(3) JALR target adder (~10 ns off the dmem-load→rob_poison limiter — which
+is now the sole board critical path after D024/D025 cleared the frontend).
+(4) IQ payload split (~3k LEs). (5) Small infra: NPU on-board error
+patterns, `make -j` suites, FENCE/ECALL random coverage, X-state lane,
+INV-G2 negative self-test. **Env note:** the two old build landmines are
+GUARDED IN THE MAKEFILE — `make` just works; if overriding, VERILATOR_ROOT
+must be `/ucrt64/share/verilator` (mount form). `gshare-m9k-pht`,
+`prf-m9k-lvt` NOT merged — pending Hanna's review + the flash confirmation.

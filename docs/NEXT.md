@@ -29,19 +29,18 @@ thing between here and the demo video. **Deferred by Hanna's choice
 
 ---
 
-## 1. PRF → M9K (LVT)  — [Hanna decides, then Claude implements]
+## 1. PRF → M9K (LVT)  — ✅ DONE (D025, branch `prf-m9k-lvt`, 2026-07-12)
 
 The audit's *other* LE pig: `ooo_prf` = 10,947 LCs (6R/3W 64×32 async-read
-register file, duplicated per read port — same disease D024 just cured for
-the PHT). Frees an estimated ~9–10k LEs; M9K usage is only 36%, so there
-is room. Same latch-fold argument as D016/D022/D024 (read addresses are
-already registered), so it should stay IPC-neutral and lockstep-verifiable.
-
-- **What Claude will bring first:** an options sheet like
-  `docs/GSHARE_SHRINK.md` — LVT (live-value-table) replication vs.
-  banked-by-read-port vs. status quo, with LE/timing/complexity tradeoffs.
-- Highest-value remaining area lever; do this before the scheduler if the
-  goal is maximum free fabric.
+register file, duplicated per read port — same disease D024 cured for the
+PHT). **Delivered: 18 M9K banks (LaForest LVT) + folded read + direct/shadow
+write-first bypass.** Options sheet = `docs/PRF_SHRINK.md` (Hanna AFK,
+delegated → Option A). **Board top 43,609 → 34,714 LEs (88% → 70%,
+−8,895); M9K 95/182; fit 0 errors, timing MET +17.47 ns; IPC-neutral**
+(CoreMark cycle-identical to baseline, hello.c 2013/1882; prf-tb 300k random
++ OoO 19/19+40/40+25/25+25/25-vio lockstep-clean; 5-lens adversarial review
+0 defects). Record: DECISIONS.md D025. **Branch not merged — pending Hanna's
+review** (the estimate was ~9–10k LEs; delivered −8,895, on the nose).
 
 ## 2. 2-stage pipelined issue-queue scheduler  — [Hanna, big µarch]
 

@@ -5,6 +5,94 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D025 — 2026-07-12 — PRF → 18 banked M9K blocks via an LVT (branch `prf-m9k-lvt`); board top 88% → 70% LEs (−8,895), IPC-neutral
+
+**Context:** the 2026-07-11 audit's per-entity fit table named `ooo_prf` =
+10,947 LCs, the audit's *other* LE pig (tied with the gshare PHT that D024
+just moved). Same disease: a 6-read / 3-write, 64×32 **async-read fabric
+register array** has no address register for Quartus to retime into block
+RAM, so the storage stayed in fabric flops, duplicated per read port, each
+port a 64:1×32 combinational mux. The lever is the read/write port network.
+
+**Options (docs/PRF_SHRINK.md):** A = LVT-replicated M9K PRF (18 blocks +
+register LVT + folded read + 2-level write-first bypass); B = multipumped
+2×-clock banked PRF (~9 blocks, but a second clock domain + CDC — deferred
+optimization, M9K is abundant); C = shrink the physical register count
+64→48 (rejected — real IPC risk, and it leaves the file in async fabric);
+D = status quo (rejected). **Hanna delegated the pick end-to-end (AFK,
+"make the best decision"); chose A** — it converts the file to block RAM
+outright, is provably IPC-neutral, and reuses the thrice-proven fold.
+
+**Mechanism (LaForest & Steffan, FPGA'10):** 6 read copies × 3 write banks
+= **18 M9K blocks** (64×32 each); a write goes to its bank in all 6 copies.
+A **64×2-bit register LVT** records, per physical register, which write
+bank last wrote it; a read looks it up to select the live bank. The whole
+file's read address is **folded** into the M9K address registers — fed the
+SEL-stage (pre-flop) source tag `sel_uop[PS]`, registered at the same edge
+`rf_u` latches, so the synchronous read lands in the RF cycle bit-aligned
+with the old async output. Two facts make it cleaner than imem: the RF read
+stage **never stalls** (data regs clocked unconditionally, bubbles ride the
+valid bits), so **no clock-enable/hold** is needed; and the PRF output is
+consumed at exactly one place (`ex_a/ex_b <= prf_r*`).
+
+**Bit-exact write-first over an OLD_DATA M9K (the one real corner):** the
+PRF holds architectural/speculative values, so — unlike the D024 PHT hint —
+it must reproduce the async `rd_bypass` exactly. An M9K returns OLD data for
+a write landing on the read address at the SEL→RF edge, so two external
+bypass levels rebuild it: **DIRECT** (this-cycle write ports vs `rtag`) =
+the original write-first, and **SHADOW** (a registered 1-cycle-older copy of
+the write ports) patches the single edge OLD_DATA drops; else the bank value
+picked by the folded `lvt_sel_rf`. Proof: for producer WB cycle W and reader
+RF cycle C, C==W → DIRECT, C==W+1 → SHADOW, C≥W+2 → bank (the LVT owner is
+≥1 cycle old by then); no overlap, no gap. Physical tags are
+single-assignment while allocated (**INV-P1** asserts no two active write
+ports share a tag), so at most one bypass ever matches. Dual-arm module like
+dmem: `ifdef VERILATOR` behavioral (3 write-bank memories, registered
+read = OLD_DATA) / `else` 18 explicit `altsyncram` (DUAL_PORT,
+`address_reg_b=CLOCK0`, `outdata_reg_b=UNREGISTERED`, `OLD_DATA`, M9K,
+`init_file=prf_zero.mif`). Reset: control regs (`rtag`, `lvt_sel_rf`,
+`wen_q`) reset to 0; data (`lvt`, banks, `wtag_q`, `wdat_q`) power up 0 like
+the old un-reset `regs`.
+
+**Verification:** a new standalone golden-model unit TB (`make prf-tb`,
+`tb/verilator/prf_tb.cpp`) drives the module against the async `rd_bypass`
++ one-cycle read latency over a directed phase (DIRECT/SHADOW/bank/p0/
+replication/3-write corners) + **~300k random R/W interleavings** — PASS,
+0 failures; the golden is deliberately blind to banks/LVT/OLD_DATA so any
+RDW corner fails there. Full-core against the **independent** ISS: OoO
+regress 19/19 + riscv-tests 40/40 + random 25/25 + `--vio` 25/25, all
+lockstep-clean; **hello.c cycle-identical (2013 cyc / 1882 instret)** —
+IPC-neutral by construction and by measurement. In-order core untouched
+(19/19; it does not even compile `ooo_prf`). **CoreMark: 421,825,353 cyc /
+432,874,206 instret / IPC 1.026, official CRCs — cycle-for-cycle IDENTICAL
+to the async-PRF baseline measured on the same tree** (the two builds were
+run back-to-back; the fold changes no cycle, as the lockstep-clean →
+identical-control-flow argument requires). Adversarial multi-lens review
+(fold-timing / bypass-corners / LVT-reset / synth-semantics / wiring), each
+finding refuted by an independent skeptic: **5 reviewers, 0 defects
+confirmed** — a fourth independent check beyond the unit TB, ISS lockstep,
+and synthesis.
+
+**Result (Quartus fit, board top `de10_top` = OoO core + MNIST demo):**
+- **Total logic elements 43,609 → 34,714 / 49,760 (88% → 70%, −8,895 LEs).**
+  A&S estimate 53,200 → 37,532 (−15,668). Dedicated registers 18,976 →
+  15,146 (−3,830). The audit's second LE pig is gone.
+- **M9K 95 / 182 (52%)** — the 18 PRF banks all mapped to block RAM
+  (confirmed `altsyncram` in the fit hierarchy); ample headroom (dmem 64,
+  imem 2, PHT 2, BTB, PRF 18).
+- **Fit Successful, 0 errors. Timing MET at the 16.67 MHz board clock,
+  worst constrained setup slack +17.47 ns, 0 violations.** The critical
+  constrained path is UNCHANGED — `dmem-load → rob_poison` (the D020 LQ
+  CAM, ~41.9 ns, ~23.5 MHz-capable); the PRF is off every top-20 path, so
+  the fold is timing-neutral (it left the async 64:1×6 mux cone in fabric
+  behind). The slow-85C Fmax *panel* reads 18.64 MHz — the pessimistic
+  all-paths floor that counts SDC-excluded async paths (same figure as
+  D022's board top); the constrained slack is the sign-off number.
+
+**Interview story:** the read-address fold Hanna has now defended four times
+(dmem D016, imem D022, gshare D024, PRF D025) + a textbook FPGA multi-ported
+block-RAM construction (LVT), verified bit-exact against an independent ISS.
+
 ## D024 — 2026-07-12 — gshare PHT → even/odd banked M9K (branch `gshare-m9k-pht`)
 
 **Context:** the 2026-07-11 audit's per-entity fit table showed
