@@ -45,6 +45,22 @@ module mmio(
     reg [15:0] hexhi;             // {HEX5,HEX4}
 
     // ---------------------------------------------------------
+    // 2-flop synchronizer on the slide switches (audit 2026-07-11).
+    // SW pins are asynchronous mechanical inputs feeding the CPU load
+    // path; the .sdc false-path silences STA on them but provides no
+    // metastability protection — and the D023 demo is switch-driven.
+    // No reset on purpose: by the time the first load can retire the
+    // chain has long settled, and reset-free flops pack better. The
+    // ISS mirrors switches as a constant, so the 2-cycle sampling
+    // delay is lockstep-invisible (the harness drives them statically).
+    // ---------------------------------------------------------
+    reg [9:0] sw_meta, sw_sync;
+    always @(posedge clk) begin
+        sw_meta <= switches;
+        sw_sync <= sw_meta;
+    end
+
+    // ---------------------------------------------------------
     // Write side. On reset LEDs clear and every display goes dark
     // (active-low segments -> all-ones). CPU stores update the
     // addressed register; unmapped IO addresses are ignored.
@@ -79,7 +95,7 @@ module mmio(
     always @(*) begin
         case (raddr)
             32'h40000000: rdata = {22'b0, leds};      // zero-extend LED bits
-            32'h40000004: rdata = {22'b0, switches};  // zero-extend switch bits
+            32'h40000004: rdata = {22'b0, sw_sync};   // synchronized switch bits
             32'h4000000C: rdata = hexlo;
             32'h40000014: rdata = {16'b0, hexhi};
             default:      rdata = 32'b0;              // unmapped address
