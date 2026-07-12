@@ -511,17 +511,47 @@ evidence — read it before picking the next task**):
   sections. `docs/book/` gitignored; `mlp-board-demo` pushed to origin
   (it existed only on this laptop).
 
-**Next**: (1) **the shrink decisions, now a bundle** — present design
-options for gshare-PHT→M9K **and** PRF→M9K (LVT) **and** IQ payload
-split (audit §1 has evidence + arithmetic); implement after Hanna picks,
-lockstep-verify each. (2) Recompile `mlp-board-demo` after the shrink →
-flash → **on-board MNIST demo** (demo video!). (3) 2-stage pipelined
-scheduler after the fabric has room. (4) Small Hanna-gated fixes from
-the audit: SW-switch 2-flop sync, hazard-unit uses_rs2 stall fix (free
-in-order IPC), JALR target adder, KEY0 .data link-assert, NPU on-board
-error patterns. (5) Deferred infra: parallel suite refactor (make -j),
-FENCE/ECALL/EBREAK + NPU-region random modes, X-state randomization
-lane. **Env note:** the two old landmines (riscv-gcc TMP form, silent
-Verilator misbuilds) are now GUARDED IN THE MAKEFILE — `make` just
-works; if overriding, VERILATOR_ROOT must be `/ucrt64/share/verilator`
-(mount form).
+**2026-07-12 — AUDIT QUICK FIXES + D024 gshare→M9K SHRINK → MNIST DEMO
+BITSTREAM BUILDS** (branch `gshare-m9k-pht`; 4 quick-fix commits + D024
+`f98d6ff`; the earlier audit-infra batch + 4 quick fixes were on
+`mlp-board-demo`, pushed):
+- **4 Hanna-approved quick fixes:** hazard `uses_rs1/uses_rs2` qualifier
+  (measured negligible — CoreMark −0.002%, it's a decode-correctness
+  cleanup not a perf win); mmio 2-flop SW-switch synchronizer;
+  `link_board.ld` ASSERT(.data/.sdata empty) KEY0 warm-reset guard;
+  deleted the redundant unindexed `-to KEY` qsf line. All verified,
+  suites green both cores.
+- **D024 (Hanna picked A1): gshare PHT → even/odd banked M9K.** The
+  #1-tied LE pig (11,137 LCs, all PHT-side — BTB was already M9K).
+  Two 512×2 M9K banks split on `pidx[0]` (pc+4 flips pc[2] → the two
+  fetch indices always differ in bit0 = the D022 imem even/odd trick on
+  the PHT); banks' address regs pre-load next-cycle indices from `npc0`
+  (a mirror of the pcF priority mux) so predictions stay same-cycle on
+  every path — A1's "blind first post-redirect slot" proved unnecessary.
+  2-phase RMW train w/ 1-deep skid (drops counted, hint-only). INV-G1
+  (index timing) + INV-G2 (flat replay-shadow = data-path check like
+  imem's INV-F1) armed. **A&S 53,200 → 46,620 LEs (−6,580); CoreMark
+  IPC 1.026 KEPT (official CRCs, 432.8M instr lockstep-clean); OoO
+  19/19+40/40+25/25+25/25-vio green; hello 1989→2013.** Adversarial
+  review (9 agents/3 lenses): 3 minor, 0 live bug, all addressed.
+- **THE PAYOFF — MNIST DEMO BITSTREAM NOW BUILDS:** the D023 top that
+  failed to route at 96% LEs (structural, 2 placements) now **FITS:
+  43,609/49,760 LEs (88%), Fitter Successful 0 errors, timing MET at
+  16.67 MHz with +16.8 ns slack** (Restricted Fmax 23.16 MHz — UP from
+  D019's 19.65 because the async PHT cloud left the frontend; new
+  limiter = dmem-load→rob_poison LQ path). **`.sof` built.** NOT yet on
+  silicon — flashing needs the USB-Blaster (Hanna's step).
+
+**Next**: (1) **Flash the MNIST demo** (`output_files/rv32i_cpu.sof` via
+Quartus Programmer + USB-Blaster) → on-board digit recognition → demo
+video. Also program the `.pof` for standalone boot. (2) Remaining audit
+levers if more room/speed wanted (all Hanna's calls): PRF→M9K LVT
+(~10k LEs), IQ payload split, 2-stage pipelined scheduler (the fabric
+now has room — 88%), JALR target adder (~10 ns off the LQ-path limiter).
+(3) Small Hanna-gated fixes: NPU on-board error patterns. (4) Deferred
+infra: parallel suite refactor (make -j), FENCE/ECALL/EBREAK +
+NPU-region random modes, X-state randomization lane, INV-G2 negative
+self-test. **Env note:** the two old landmines are GUARDED IN THE
+MAKEFILE — `make` just works; if overriding, VERILATOR_ROOT must be
+`/ucrt64/share/verilator` (mount form). `gshare-m9k-pht` NOT merged —
+pending Hanna's review + the flash confirmation.

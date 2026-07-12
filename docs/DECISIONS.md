@@ -64,8 +64,19 @@ baseline, confirming prediction accuracy is unchanged; hello.c 1989 →
 (3 lenses): 3 minor findings, zero live bugs.
 
 **Result: A&S 53,200 → 46,620 LEs (−6,580, 12.4% of the device freed),
-registers 18,976 → 16,995**, PHT now in 2 M9Ks. The budget gate passes;
-this is what unblocks the D023 board fit.
+registers 18,976 → 16,995**, PHT now in 2 M9Ks. The budget gate passes.
+
+**BOARD FIT UNBLOCKED (the whole point):** the D023 MNIST-demo top —
+which failed to route at 96% LEs on 2026-07-11 (817 / 1,415 unrouted
+conflicts, two placements, called structural) — now **FITS: 43,609 /
+49,760 LEs (88%), Fitter Successful, 0 errors.** Timing MET at the
+16.67 MHz board clock with **+16.8 ns slack** (Restricted Fmax
+23.16 MHz — actually UP from D019's ~19.65, because removing the async
+PHT read/update cloud shortened the frontend; the new limiter is the
+dmem-load → rob_poison LQ path from D020). `.sof` built. NOT yet on
+silicon — flashing needs the USB-Blaster (Hanna's step). This confirms
+the audit's core thesis: the LE relief had to come from the RTL (PHT →
+M9K), not synthesis settings.
 
 ## D023 — 2026-07-11 — MLP memory sizing + 7-segment display path: the on-board MNIST demo (branch `mlp-board-demo`)
 
