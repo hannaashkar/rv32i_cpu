@@ -37,15 +37,28 @@ SECTIONS
 
     .dmem_origin : { KEEP(*(.dmem_origin)) } > DMEM
 
-    .rodata : { *(.rodata*) } > DMEM
+    /* .srodata lives with .rodata here (NOT in .sdata as in link.ld):
+       it is constant data, and the guard below must only see truly
+       WRITABLE initialized sections. Cost: small const objects lose gp
+       relaxation on this board script — correctness is unaffected. */
+    .rodata : { *(.rodata*) *(.srodata*) } > DMEM
 
     .data : { *(.data*) } > DMEM
 
     .sdata : {
         __global_pointer$ = . + 0x800;
-        *(.srodata*)
         *(.sdata*)
     } > DMEM
+
+    /* KEY0 warm-reset guard (audit 2026-07-11): the dmem MIF is loaded
+       only at device CONFIGURATION. KEY0 restarts _start without
+       reloading it; crt0 re-zeroes .bss but nothing can restore .data —
+       so a board program with initialized writable data would silently
+       run its second pass on corrupted globals. Make that a link error
+       instead: board programs must keep writable globals zero-initialized
+       (.bss/.sbss) or const (.rodata). */
+    ASSERT(SIZEOF(.data) == 0 && SIZEOF(.sdata) == 0,
+        "link_board.ld: initialized writable data (.data/.sdata) is forbidden in board programs - KEY0 warm reset does not reload the dmem MIF; use zero-initialized or const data")
 
     . = ALIGN(4);
     __bss_start = .;
