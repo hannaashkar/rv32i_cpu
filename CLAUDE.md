@@ -542,16 +542,20 @@ BITSTREAM BUILDS** (branch `gshare-m9k-pht`; 4 quick-fix commits + D024
   limiter = dmem-load→rob_poison LQ path). **`.sof` built.** NOT yet on
   silicon — flashing needs the USB-Blaster (Hanna's step).
 
-**Next**: (1) **Flash the MNIST demo** (`output_files/rv32i_cpu.sof` via
-Quartus Programmer + USB-Blaster) → on-board digit recognition → demo
-video. Also program the `.pof` for standalone boot. (2) Remaining audit
-levers if more room/speed wanted (all Hanna's calls): PRF→M9K LVT
-(~10k LEs), IQ payload split, 2-stage pipelined scheduler (the fabric
-now has room — 88%), JALR target adder (~10 ns off the LQ-path limiter).
-(3) Small Hanna-gated fixes: NPU on-board error patterns. (4) Deferred
-infra: parallel suite refactor (make -j), FENCE/ECALL/EBREAK +
-NPU-region random modes, X-state randomization lane, INV-G2 negative
-self-test. **Env note:** the two old landmines are GUARDED IN THE
-MAKEFILE — `make` just works; if overriding, VERILATOR_ROOT must be
-`/ucrt64/share/verilator` (mount form). `gshare-m9k-pht` NOT merged —
+**Merged to main + pushed live 2026-07-12** (Hanna: "push to live";
+origin/main = `e2a54b7`, was 2082aab). Both cores re-verified green on the
+merged tree before merge. Main now = the MNIST-demo board top with the
+banked-M9K gshare.
+
+**Next → see `docs/NEXT.md` (the start-here backlog).** In brief:
+(0) **Flash the MNIST demo** — `.sof` is built; DEFERRED by Hanna
+2026-07-12, it's her hardware step (USB-Blaster → digit demo → video).
+Do NOT auto-do. (1) PRF→M9K LVT — the other ~10k-LE pig; Claude brings an
+options sheet first. (2) 2-stage pipelined scheduler — OoO wall-clock fix
+(fabric has room at 88%). (3) JALR target adder (~10 ns off the
+dmem-load→rob_poison limiter). (4) IQ payload split (~3k LEs). (5) Small
+infra: NPU on-board error patterns, `make -j` suites, FENCE/ECALL random
+coverage, X-state lane, INV-G2 negative self-test. **Env note:** the two
+old build landmines are GUARDED IN THE MAKEFILE — `make` just works; if
+overriding, VERILATOR_ROOT must be `/ucrt64/share/verilator` (mount form). `gshare-m9k-pht` NOT merged —
 pending Hanna's review + the flash confirmation.
