@@ -556,6 +556,7 @@ module cpu_pipeline (
         .rdE         (rdE),
         .rs1D        (rs1D),
         .rs2D        (rs2D),
+        .opcodeD     (opcodeD),
         .mispredictE (mispredictE),
 
         .stallF      (stallF),
