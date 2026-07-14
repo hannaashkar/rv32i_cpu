@@ -1,11 +1,13 @@
 # Next tasks — start here
 
-Last updated 2026-07-14. `main` = the MNIST-demo board top with the
-banked-M9K gshare (D024) and banked-M9K PRF (D025). The active stacked feature
-branch `codex/load-wb-bypass-cut` contains the fully verified D026 LQ, D027 SQ,
-D028 IQ, and D029 load-bypass timing work. It is local, not pushed or merged.
-Freshness-clean PLL-/2 D029 MNIST `.sof` and `.pof` images are assembled but
-**unflashed**. Everything below is the measured backlog, most-ready first.
+Last updated 2026-07-15. The production RTL baseline is merge
+**`3c3171f`**: the MNIST-demo board top plus D024/D025 storage work,
+verification hardening, D026 LQ, D027 SQ, D028 IQ, and D029 load-bypass/PLL
+timing work are all merged and pushed. GitHub Actions run **29368469898 is
+green**. The complete feature stack is backed up remotely at
+`codex/load-wb-bypass-cut` commit **`fe3cfb0`**. Freshness-clean PLL-/2 D029
+MNIST `.sof` and `.pof` images are assembled but **unflashed**. Everything
+below is the measured backlog, most-ready first.
 
 Division of labor: the standing project rule assigns microarchitecture to
 Hanna and infrastructure to Codex. On 2026-07-14 Hanna explicitly delegated
@@ -18,9 +20,11 @@ revoked. Deeper evidence for the RTL levers is in
 
 ## 0. Flash the MNIST demo  — [Hanna, hardware]  ← the milestone
 
-The fresh D029 `.sof` is built (`synth/output_files/rv32i_cpu.sof`). This is the only
-thing between the last fully signed-off image and the demo video. **Deferred
-by Hanna's choice 2026-07-12 — do NOT auto-do; it needs the physical board.**
+The fresh production D029 `.sof` is built
+(`synth/output_files/rv32i_cpu.sof`). This is the only thing between the last
+fully signed-off image and the demo video. **No JTAG hardware was available on
+2026-07-15; do not claim this acceptance step has happened.** It needs Hanna
+and the physical board.
 
 - Plug in the USB-Blaster, open Quartus Programmer, load the `.sof`, flash.
 - Flip SW[2:0] to select a digit; HEX displays show true label vs the
@@ -149,10 +153,14 @@ deeper scheduler. Evidence: audit §1 and D029 STA.
 
 ## 7. Small infra / cleanups  — [Codex, do anytime]
 
-- **Regenerate the portfolio book before sharing it.** The ignored local
-  `docs/book/rv32i_soc_book.{html,pdf}` still contains pre-D024/D025/D027 area,
-  NPU, and lockstep numbers. Rebuild it from the tracked evidence ledger (or
-  label/remove the stale copy); never send the current local PDF to recruiters.
+- **Recruiter portfolio — DONE.** The canonical package is the tracked
+  [`output/pdf/rv32i_soc_portfolio.pdf`](../output/pdf/rv32i_soc_portfolio.pdf),
+  generated from [`portfolio/evidence.json`](../portfolio/evidence.json) by
+  [`scripts/build_portfolio.py`](../scripts/build_portfolio.py). It includes
+  D024–D029, the green CI run, 99.3% coverage, reportable CoreMark, and an
+  explicit 25 MHz build-vs-silicon boundary. Résumé/LinkedIn/interview copy is
+  in [`docs/CAREER_PACKET.md`](CAREER_PACKET.md). The ignored `docs/book/`
+  files are retired local artifacts and must not be shared.
 - **Portable setup/tool discovery** — the wrapper is excellent on Hanna's
   machine, but Makefile defaults still embed local xPack/Python/Quartus paths.
   Add `docs/SETUP.md`, PATH-first discovery, explicit override examples, and a
@@ -161,8 +169,10 @@ deeper scheduler. Evidence: audit §1 and D029 STA.
   license. Pick an intentional hardware/software license (and confirm how the
   separately licensed vendored CoreMark source is described) before adding it;
   Codex should not silently choose ownership terms.
-- **CI coverage for the new lanes** — add bounded system/NPU/X-state jobs after
-  this verification branch lands; preserve seeded artifacts on failure.
+- **CI coverage for the new lanes** — the production merge gate is green
+  (GitHub Actions run 29368469898). Add bounded system/NPU/X-state jobs and
+  preserve seeded artifacts on failure; the deeper lanes currently remain
+  local release-gate evidence rather than hosted CI jobs.
 - **NPU on-board error patterns** — mlp_board.c parks with dark displays
   on NPU-ID / self-test failure (indistinguishable from a dead board);
   drive an "E-1"/"E-2" + fail-count pattern on HEX first. (Hanna-gated:
@@ -189,26 +199,25 @@ deeper scheduler. Evidence: audit §1 and D029 STA.
 
 ---
 
-## Branch / merge state (2026-07-14)
+## Branch / merge state (2026-07-15)
 
-- `main` = `ab79b50` = D024 + D025 merged and pushed.
-- `codex/verif-hardening` = verification/evidence batch commits `533aaa4` +
-  `15f6d98` (local, not pushed).
-- `codex/lq-balanced-tree` = D026 + B015 committed locally; full sim, fit, STA,
-  and assembler green.
-- `codex/sq-forward-tree` = D027 stacked on D026; full sim, reportable
-  CoreMark, coverage, fit, STA, `.sof`, and `.pof` green. Local only: not
-  pushed or merged.
-- `codex/iq-select-pipeline` = D028 stacked on D027; all unit/system lockstep
-  gates, fresh coverage, hello.c, reportable CoreMark, fit, and STA green.
-  Fresh D028 MNIST `.sof`/`.pof` assembled and freshness-clean. Local only: not
-  merged or pushed; images unflashed and not hardware-confirmed.
-- `codex/load-wb-bypass-cut` = D029 stacked on D028; exact source-use oracle,
-  new directed regression, all unit/system/benchmark/coverage gates, actual
-  PLL-/2 fit/STA, and fresh 25 MHz `.sof`/`.pof` are green. Local only: not
-  pushed or merged; images unflashed and not hardware-confirmed.
-- Feature branches `mlp-board-demo`, `gshare-m9k-pht` pushed (now folded
-  into main; safe to delete locally once you're comfortable).
+- The production RTL baseline is **`3c3171f`**, containing verification
+  hardening and D026–D029. It is pushed, and GitHub Actions run
+  **29368469898 passed**. Recruiter-package commits may sit above this RTL
+  baseline without changing any hardware result.
+- `codex/load-wb-bypass-cut` = **`fe3cfb0`** locally and on origin. It is the
+  pushed backup of the complete pre-merge feature stack; its content is folded
+  into `main` by merge `3c3171f`.
+- The older stacked branches (`codex/verif-hardening`,
+  `codex/lq-balanced-tree`, `codex/sq-forward-tree`, and
+  `codex/iq-select-pipeline`) are historical waypoints, not outstanding
+  production work. Keep or delete them only as a deliberate branch-hygiene
+  choice; no implementation is stranded there.
+- Fresh PLL-/2 D029 MNIST `.sof`/`.pof` images remain unflashed and are not
+  hardware-confirmed. No JTAG hardware was available on 2026-07-15. Physical
+  truth remains the earlier 16.67 MHz OoO LED-walker/CFM image.
+- Feature branches `mlp-board-demo` and `gshare-m9k-pht` are also folded into
+  main and retained remotely only as history.
 - Env: the old build landmines are guarded in the Makefile — `make` just
   works. If overriding, `VERILATOR_ROOT` must be the mount form
   `/ucrt64/share/verilator`.

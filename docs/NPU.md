@@ -186,9 +186,10 @@ The array maps to 16 embedded 9×9 multipliers and is integrated with both
 cores. An OoO configuration containing the NPU, M9K-resident program memory,
 PLL, and timing constraints has run on the DE10-Lite at 16.67 MHz and booted
 standalone from internal flash; that hardware proof used the LED walker, not
-NPU inference. The current D029 MNIST top on local branch
-`codex/load-wb-bypass-cut` (not merged or pushed)—including M9K-initialized
-weights—fits at **34,945 / 49,760 LEs (70%)**, uses **15,140 registers,
+NPU inference. The current D029 MNIST top is merged and pushed at production
+RTL baseline **`3c3171f`**; GitHub Actions run **29368469898 is green**. Including
+M9K-initialized weights, it fits at **34,945 / 49,760 LEs (70%)**, uses
+**15,140 registers,
 632,444 memory bits, and 16 embedded 9×9 multiplier elements**, and reaches
 **31.29 MHz** slow-85C Fmax. An actual PLL-/2 build closes at **25 MHz** with
 **+8.045 ns** slow-85C setup slack; hold, recovery, and removal are also
@@ -200,8 +201,9 @@ a permanent source-use oracle that reconstructs the old mux priority on every
 valid EX uop. Full unit/system/benchmark gates pass with zero lockstep
 divergence, and line coverage is **99.3% (1596/1607)** across 61 programs per
 core. Freshness-clean PLL-/2 D029 MNIST `.sof` and `.pof` images were assembled
-from MIF stamp `mlp`, but remain unflashed. The only hardware-confirmed OoO
-image remains the earlier 16.67 MHz LED walker/CFM build; the first physical
-MNIST inference is still pending. The **85.99× / 93.30×** speedup table above
+from MIF stamp `mlp`, but remain unflashed; no JTAG hardware was available on
+2026-07-15. The only hardware-confirmed OoO image remains the earlier 16.67 MHz
+LED walker/CFM build; the first physical MNIST inference is still pending. The
+**85.99× / 93.30×** speedup table above
 retains its D025 provenance because the full MLP benchmark was not rerun for
 D026–D029.

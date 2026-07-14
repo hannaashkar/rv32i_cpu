@@ -47,6 +47,9 @@ sw/npu_mlp/data/
 # Generated project book (PDF/HTML) — regenerable artifact, keep out of git history
 docs/book/
 
+# Portfolio visual-inspection renders (the final PDF in output/pdf is tracked)
+tmp/pdfs/
+
 # Editor / backup noise
 *.bak
 *.orig

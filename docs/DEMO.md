@@ -11,16 +11,17 @@ cycle-exact top-two tree. D029 then proved that the memory/load-WB arm of the
 generic EX bypass could never win, added a permanent source-use oracle, and
 removed the dead mux input without changing a cycle.
 
-The current top on local branch `codex/load-wb-bypass-cut` (not merged or
-pushed) fits at **34,945 / 49,760 LEs (70%)**, uses **15,140 registers,
-632,444 memory bits, and 16 multiplier elements**, and reaches **31.29 MHz**
-slow-85C Fmax. The actual PLL-/2 build closes at **25 MHz** with **+8.045 ns**
-slow-85C setup slack; hold, recovery, and removal are also positive, and every
-path is constrained. Both full lockstep gates pass, and line coverage is
-**99.3% (1596/1607)** across 61 programs per core. Freshness-clean D029 MNIST
-`.sof` and `.pof` images were assembled from MIF stamp `mlp`, but remain
-**unflashed**. Hardware truth is still the earlier 16.67 MHz LED-walker/CFM
-image; MNIST has not run on silicon. Before
+The current production RTL top is merged and pushed at baseline **`3c3171f`**
+(GitHub Actions run **29368469898 green**). It fits at **34,945 / 49,760 LEs
+(70%)**, uses **15,140 registers, 632,444 memory bits, and 16 multiplier
+elements**, and reaches **31.29 MHz** slow-85C Fmax. The actual PLL-/2 build
+closes at **25 MHz** with **+8.045 ns** slow-85C setup slack; hold, recovery,
+and removal are also positive, and every path is constrained. Both full
+lockstep gates pass, and line coverage is **99.3% (1596/1607)** across 61
+programs per core. Freshness-clean D029 MNIST `.sof` and `.pof` images were
+assembled from MIF stamp `mlp`, but remain **unflashed**. No JTAG hardware was
+available on 2026-07-15. Hardware truth is still the earlier 16.67 MHz
+LED-walker/CFM image; MNIST has not run on silicon. Before
 D024 it failed to route at 96% LEs — if you are on an older checkout and hit
 "Can't route", that is why. If anything surprises you, the board state
 section at the bottom is the first thing to check.
@@ -105,6 +106,8 @@ walker runs, fetch/PLL/timing are healthy.
   the earlier 16.67 MHz OoO LED walker/CFM image—not D029 and not MNIST
   inference. Check `git log synth/` to correlate any later manually
   programmed bitstream.
+- As of 2026-07-15 no JTAG hardware was available, so the production 25 MHz
+  `.sof`/`.pof` could not yet be accepted on the physical board.
 - Pin assignments in `synth/rv32i_cpu.qsf` are copied from the proven
   build and are **not to be edited**; the HEX0-5 pins (added 2026-07-11,
   D023) were verified against two independent DE10-Lite references.

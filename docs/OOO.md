@@ -46,6 +46,14 @@
 > +8.045 ns. Fresh `.sof`/`.pof` images are unflashed; physical truth remains
 > the earlier 16.67 MHz OoO LED-walker/CFM image. See
 > **[WB_BYPASS_TIMING.md](WB_BYPASS_TIMING.md)** and D029.
+>
+> **Production status (2026-07-15).** Verification hardening and D026–D029
+> are merged and pushed at RTL baseline **`3c3171f`**, and GitHub Actions run
+> **29368469898 is green**. The feature
+> stack is backed up remotely at `codex/load-wb-bypass-cut` (`fe3cfb0`). This
+> changes repository status, not hardware status: no JTAG hardware was
+> available on 2026-07-15, the 25 MHz MNIST files remain unflashed, and the
+> last hardware-confirmed image remains the 16.67 MHz OoO LED walker in CFM.
 
 ## Measured result (2026-07-03, same binary as the baseline)
 

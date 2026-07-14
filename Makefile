@@ -12,6 +12,7 @@
 #   make test         run the smoke test (build everything as needed)
 #   make run PROG=x   run an arbitrary .hex program
 #   make wave PROG=x  same, but dump sim.fst waveform
+#   make portfolio    rebuild the recruiter-facing evidence PDF
 #   make synth-check  Quartus Analysis & Synthesis sanity check
 #   make clean
 # ============================================================================
@@ -756,6 +757,16 @@ synth-fit: synth-check
 synth-sta:
 	cd synth && $(QUARTUS_STA) -t ../scripts/sta_paths.tcl rv32i_cpu
 .PHONY: synth-fit synth-sta
+
+# Recruiter-facing PDF: all claims come from portfolio/evidence.json. Install
+# the one optional dependency with `python -m pip install -r
+# requirements-portfolio.txt`; PORTFOLIO_PYTHON can select a separate venv.
+# Keep this independent of the project-local Windows PYTHON default so the
+# docs-only target works in an ordinary Linux/macOS/Windows Python setup.
+PORTFOLIO_PYTHON ?= python
+portfolio:
+	$(PORTFOLIO_PYTHON) scripts/build_portfolio.py
+.PHONY: portfolio
 
 clean:
 	rm -rf obj_dir obj_dir_ooo obj_dir_x obj_dir_x_ooo obj_dir_npu obj_dir_stset obj_dir_prf obj_dir_lq obj_dir_sq obj_dir_iq sim.fst
