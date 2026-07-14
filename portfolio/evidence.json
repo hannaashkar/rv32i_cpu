@@ -1,0 +1,522 @@
+{
+  "schema_version": 1,
+  "document": {
+    "title": "Measured RISC-V SoC Portfolio",
+    "subtitle": "From a five-stage RV32I + Zicsr core to a verified two-wide out-of-order SoC with an int8 neural accelerator",
+    "short_title": "rv32i_cpu",
+    "kicker": "COMPUTER ARCHITECTURE / RTL / FPGA / VERIFICATION",
+    "output_path": "output/pdf/rv32i_soc_portfolio.pdf",
+    "page_count": 8,
+    "author_line": "Hanna Ashkar - Electrical Engineering, Technion",
+    "subject": "A measured and reproducible RISC-V SoC engineering portfolio",
+    "creator": "scripts/build_portfolio.py using ReportLab",
+    "footer_template": "rv32i_cpu / measured evidence / page {page} of {total}",
+    "version_label": "Production evidence checkpoint",
+    "closing_line": "Architecture is only impressive when the measurements, failures, and proof survive scrutiny."
+  },
+  "identity": {
+    "name": "Hanna Ashkar",
+    "program": "Electrical Engineering",
+    "institution": "Technion - Israel Institute of Technology",
+    "focus": "Digital design, computer architecture, RISC-V, FPGA systems, and verification",
+    "github_handle": "hannaashkar",
+    "profile_url": "https://github.com/hannaashkar"
+  },
+  "production": {
+    "commit": "3c3171f",
+    "commit_label": "RTL evidence checkpoint 3c3171f",
+    "commit_url": "https://github.com/hannaashkar/rv32i_cpu/commit/3c3171f",
+    "ci_label": "GitHub Actions production run - passed",
+    "ci_url": "https://github.com/hannaashkar/rv32i_cpu/actions/runs/29368469898",
+    "repo_label": "Source repository and reproducible build flow",
+    "repo_url": "https://github.com/hannaashkar/rv32i_cpu",
+    "branch": "main"
+  },
+  "boundaries": {
+    "title": "Evidence boundary",
+    "linux_capable": false,
+    "physical_25mhz": false,
+    "physical_mnist": false,
+    "statement": "The 25 MHz MNIST image is fully placed, routed, timing-clean, and assembled, but it has not yet been flashed. Hardware-confirmed OoO operation remains 16.67 MHz with the LED walker and standalone internal-flash boot. The CPU runs bare-metal RV32I + Zicsr software; traps, privileged execution, an MMU, external DRAM, and Linux are not implemented.",
+    "short_statement": "25 MHz is build-proven, not yet silicon-proven. Linux is outside the implemented ISA and platform scope.",
+    "accuracy_statement": "97.13% is the offline integer model result over 10,000 MNIST images. RTL bit-exact validation covers 32 exported images.",
+    "benchmark_statement": "CoreMark/MHz and IPC are cycle-accurate simulation measurements with official CRC validation and retirement lockstep."
+  },
+  "headline_metrics": [
+    {
+      "value": "+20.91%",
+      "label": "CoreMark/MHz gain",
+      "detail": "1.176568 in-order to 1.422552 OoO on the same 720-iteration image",
+      "status": "MEASURED SIMULATION",
+      "tone": "lime"
+    },
+    {
+      "value": "99.3%",
+      "label": "RTL line coverage",
+      "detail": "1596 of 1607 lines across 61 programs per core with zero failures",
+      "status": "VERIFICATION EVIDENCE",
+      "tone": "cyan"
+    },
+    {
+      "value": "93.30x",
+      "label": "OoO NPU cycle speedup",
+      "detail": "58,535,712 software cycles to 627,343 NPU cycles; logits bit-exact",
+      "status": "MEASURED SIMULATION",
+      "tone": "orange"
+    },
+    {
+      "value": "25 MHz",
+      "label": "Timing-clean board build",
+      "detail": "31.29 MHz Fmax and +8.045 ns slow-85C setup slack; not yet flashed",
+      "status": "QUARTUS BUILD",
+      "tone": "violet"
+    }
+  ],
+  "architecture": {
+    "page_title": "One software stack, two CPUs, one measured SoC",
+    "page_intro": "The same freestanding C and assembly binaries run on the baseline and OoO cores. Both retire into an independent project-ISA model, while shared M9K memories, MMIO, and the NPU keep the platform comparison honest.",
+    "software_label": "Bare-metal RV32I + Zicsr software",
+    "same_binary_label": "IDENTICAL BINARY",
+    "inorder": {
+      "title": "Five-stage in-order CPU",
+      "subtitle": "IF / ID / EX / MEM / WB",
+      "details": [
+        "Forwarding, interlocks, branch prediction",
+        "Cycle and instret hardware counters",
+        "50 MHz hardware-confirmed"
+      ]
+    },
+    "ooo": {
+      "title": "Two-wide out-of-order CPU",
+      "subtitle": "R10K-style rename and speculative execution",
+      "details": [
+        "64 physical registers / 32-entry ROB",
+        "16-entry IQ / 8-entry SQ / 8-entry LQ",
+        "Gshare + BTB + RAS + store sets",
+        "Two-wide dispatch and retirement"
+      ]
+    },
+    "shared": [
+      {
+        "title": "M9K memory system",
+        "detail": "Banked instruction memory and initialized data memory"
+      },
+      {
+        "title": "MMIO platform",
+        "detail": "LEDs, switches, six seven-segment displays, and test/console hooks"
+      },
+      {
+        "title": "4x4 int8 NPU",
+        "detail": "Output-stationary systolic array with 16 hardware multipliers"
+      }
+    ],
+    "board_label": "Terasic DE10-Lite / Intel MAX 10 / PLL + SDC / internal-flash boot",
+    "iss_label": "Independent ISA model",
+    "iss_detail": "Every retired PC, register writeback, and memory store compared",
+    "principle": "Architecture, accelerator, firmware, physical implementation, and verification are treated as one system."
+  },
+  "cpu_performance": {
+    "page_title": "Performance journey: IPC gains meet FPGA physics",
+    "page_intro": "The OoO core wins normalized CPU work, but its first board port exposed the central physical-design lesson: wall-clock performance is IPC multiplied by clock frequency.",
+    "coremark_chart": {
+      "title": "Current CoreMark/MHz A/B",
+      "unit": "CoreMark/MHz",
+      "bars": [
+        {
+          "label": "Five-stage in-order",
+          "value": 1.176568,
+          "display": "1.176568",
+          "tone": "slate"
+        },
+        {
+          "label": "Two-wide OoO D029",
+          "value": 1.422552,
+          "display": "1.422552",
+          "tone": "lime"
+        }
+      ],
+      "improvement_percent": 20.91,
+      "improvement_label": "+20.91% on the exact same 720-iteration image"
+    },
+    "benchmark": {
+      "title": "Reportable D029 CoreMark",
+      "iterations": 720,
+      "benchmark_ticks": 506132722,
+      "full_run_cycles": 506197207,
+      "retired_instructions": 519453600,
+      "ipc": 1.026,
+      "coremark_per_mhz": 1.422552,
+      "validation": "Official CRCs pass; Correct operation validated; zero lockstep divergence",
+      "cycle_exact_note": "D029 is cycle-exact to D028 despite removing a critical bypass arm."
+    },
+    "fmax_chart": {
+      "title": "Routed OoO Fmax journey",
+      "unit": "MHz",
+      "points": [
+        {
+          "label": "First board port",
+          "short": "D018",
+          "value": 8.42,
+          "status": "characterized"
+        },
+        {
+          "label": "Balanced IQ select",
+          "short": "D019",
+          "value": 19.65,
+          "status": "characterized"
+        },
+        {
+          "label": "M9K PHT + PRF",
+          "short": "D025",
+          "value": 23.51,
+          "status": "characterized"
+        },
+        {
+          "label": "Balanced LQ selector",
+          "short": "D026",
+          "value": 25.10,
+          "status": "characterized"
+        },
+        {
+          "label": "Balanced SQ selector",
+          "short": "D027",
+          "value": 25.47,
+          "status": "characterized"
+        },
+        {
+          "label": "IQ top-two tournament",
+          "short": "D028",
+          "value": 27.02,
+          "status": "characterized"
+        },
+        {
+          "label": "Dead WB2 bypass cut",
+          "short": "D029",
+          "value": 31.29,
+          "status": "current build"
+        }
+      ]
+    },
+    "lesson_title": "The honest result",
+    "lesson": "The hardware-confirmed in-order core runs at 50 MHz, while the hardware-confirmed OoO image runs at 16.67 MHz. D029 closes a 25 MHz image with margin, but it remains unflashed. The project reports the IPC win and the remaining frequency gap together."
+  },
+  "verification": {
+    "page_title": "Verification is part of the microarchitecture",
+    "page_intro": "Every CPU test and benchmark runs retirement lockstep by default. Directed tests explain known corners; independent models, random stress, assertions, and coverage are the safety nets for unknown ones.",
+    "lockstep": {
+      "rtl_label": "RTL retirement stream",
+      "comparator_label": "Cycle-aware lockstep comparator",
+      "iss_label": "Independent ISA model",
+      "compares": "PC / architectural register writes / memory stores",
+      "failure_behavior": "Stops at the first mismatching instruction with a retired-history ring and full register dump"
+    },
+    "coverage": {
+      "percent": 99.3,
+      "covered": 1596,
+      "total": 1607,
+      "programs_per_core": 61,
+      "label": "Combined Verilator RTL line coverage",
+      "scope_note": "Line coverage is not formal proof; it is one layer in the sign-off stack."
+    },
+    "test_lanes": [
+      {
+        "value": "21/21",
+        "label": "Directed assembly + C",
+        "detail": "Both cores"
+      },
+      {
+        "value": "40/40",
+        "label": "riscv-tests rv32ui",
+        "detail": "Both cores"
+      },
+      {
+        "value": "25/25",
+        "label": "Base / system / NPU random",
+        "detail": "Each lane, each core"
+      },
+      {
+        "value": "25/25",
+        "label": "Load-violation stress",
+        "detail": "OoO only"
+      },
+      {
+        "value": "84/84",
+        "label": "Randomized X/reset runs",
+        "detail": "Each core"
+      }
+    ],
+    "bugs": {
+      "count": 15,
+      "range": "B001-B015",
+      "title": "Bug culture: symptom -> root cause -> detector -> fix -> regression",
+      "cases": [
+        {
+          "id": "B009",
+          "summary": "Slot-1-only store silently missed SQ allocation",
+          "caught_by": "Lockstep within minutes of first OoO boot"
+        },
+        {
+          "id": "B011",
+          "summary": "Stalled NPU access recomputed operands from decaying bypasses",
+          "caught_by": "Adversarial review before merge"
+        },
+        {
+          "id": "B014",
+          "summary": "Store-set training raced a violation flush",
+          "caught_by": "Its own invariant on the first regression"
+        },
+        {
+          "id": "B015",
+          "summary": "Slot-1-only load could miss the final LQ entry",
+          "caught_by": "Independent LQ model and one-free-slot reproducer"
+        }
+      ]
+    }
+  },
+  "npu": {
+    "page_title": "A real accelerator workload, not a toy MAC demo",
+    "page_intro": "The tightly coupled NPU executes the integer matrix work of a trained 784-to-32-to-10 MNIST MLP. CPU-enforced ordering makes accelerator access correct without software polling.",
+    "array": {
+      "rows": 4,
+      "columns": 4,
+      "datatype": "int8 inputs and weights / int32 accumulators",
+      "dataflow": "Output-stationary systolic dataflow",
+      "pass_cycles": 10,
+      "multiplier_elements": 16,
+      "label": "4x4 systolic array"
+    },
+    "network": {
+      "shape": "784 -> 32 -> 10",
+      "quantization": "Symmetric int8 with TFLite-style requantization",
+      "float_accuracy_percent": 97.10,
+      "integer_accuracy_percent": 97.13,
+      "dataset_images": 10000,
+      "label": "Quantized MNIST MLP"
+    },
+    "speedups": [
+      {
+        "label": "Five-stage in-order",
+        "software_cycles": 96367418,
+        "npu_cycles": 1120610,
+        "speedup": 85.99,
+        "display": "85.99x"
+      },
+      {
+        "label": "Two-wide OoO",
+        "software_cycles": 58535712,
+        "npu_cycles": 627343,
+        "speedup": 93.30,
+        "display": "93.30x"
+      }
+    ],
+    "bit_exact": {
+      "rtl_images": 32,
+      "rtl_correct": 32,
+      "statement": "Software and NPU logits are bit-exact on 32 of 32 exported images."
+    },
+    "board_demo": {
+      "embedded_images": 8,
+      "simulation_correct": 8,
+      "inorder_cycles": 687018,
+      "ooo_cycles": 376112,
+      "ooo_cycle_reduction_percent": 45.3,
+      "cycle_speedup": 1.83,
+      "estimated_inference_ms_at_25mhz": 1.9,
+      "statement": "The switch-driven seven-segment board application self-tests 8 embedded images in simulation on both cores. Its 25 MHz image is assembled but has not run on silicon."
+    },
+    "ordering_statement": "IO loads wait for older stores and NPU busy state in hardware; software does not poll between commands."
+  },
+  "fpga": {
+    "page_title": "Physical implementation: measured build, explicit silicon boundary",
+    "page_intro": "The current complete top includes the OoO core, NPU, initialized MNIST program and weights, PLL, timing constraints, and display MMIO. Quartus results and board results are shown as different evidence classes.",
+    "device": "Terasic DE10-Lite - Intel MAX 10 10M50DAF484C7G",
+    "resources": {
+      "logic_used": 34945,
+      "logic_capacity": 49760,
+      "logic_percent": 70,
+      "registers": 15140,
+      "memory_bits": 632444,
+      "m9k_blocks": 95,
+      "m9k_capacity": 182,
+      "multiplier_elements": 16,
+      "title": "Current D029 routed top"
+    },
+    "timing": {
+      "configured_clock_mhz": 25.0,
+      "fmax_mhz": 31.29,
+      "corner": "Slow silicon, 85 C",
+      "setup_slack_ns": 8.045,
+      "hold_slack_ns": 0.339,
+      "recovery_slack_ns": 34.440,
+      "removal_slack_ns": 1.506,
+      "unconstrained_paths": 0,
+      "clock_increase_percent": 50,
+      "title": "Actual PLL /2 place-and-route sign-off"
+    },
+    "hardware_confirmed": [
+      {
+        "label": "In-order core",
+        "clock_mhz": 50.0,
+        "proof": "LED program running on the DE10-Lite; STA Fmax 53.95 MHz"
+      },
+      {
+        "label": "OoO core revision",
+        "clock_mhz": 16.67,
+        "proof": "M9K instruction fetch, LED walker, and standalone internal-flash boot on the board"
+      }
+    ],
+    "build_only": {
+      "label": "D029 OoO + NPU + MNIST build",
+      "clock_mhz": 25.0,
+      "status": "Placed, routed, timing-clean, assembled, unflashed",
+      "sof_sha256": "1ECB4B6D8E450587CC6F96C13D3008CDC90CE1DED64137D8C82B6786DE14E85D",
+      "pof_sha256": "C2F40218950DE037BF214ABEBA6A83392F81744E10D627043C96CF7414439C75",
+      "mif_stamp": "mlp"
+    },
+    "implementation_moves": [
+      "Banked M9K instruction memory with registered parity crossbar",
+      "MIF-initialized data memory and MAX 10 ERAM configuration mode",
+      "Gshare PHT moved from async logic to banked M9K storage",
+      "Six-read, three-write physical register file built as an M9K live-value table",
+      "PLL, complete SDC constraints, and all timing classes checked"
+    ]
+  },
+  "decisions": {
+    "page_title": "Decisions that show engineering judgment",
+    "page_intro": "The strongest part of the project is not feature count. It is the record of measured tradeoffs, rejected alternatives, invariants, and cycle-exact implementation changes.",
+    "items": [
+      {
+        "id": "D019",
+        "title": "Balance the IQ select tree",
+        "problem": "A 16-deep serial age scan limited the first OoO board port to 8.42 MHz.",
+        "choice": "Use a lower-index-preserving log-depth tree instead of registering the grant and adding scheduler latency.",
+        "evidence": "Fmax 8.42 to 19.65 MHz, a 2.33x gain, with bit-identical IPC."
+      },
+      {
+        "id": "D021",
+        "title": "Predict memory dependence with store sets",
+        "problem": "Always-speculative loads improved CoreMark but made spill-heavy hello.c 36% slower.",
+        "choice": "Use SSIT plus LFST masks and train on real LQ violations; compare against conservative, always-speculate, and Alpha-style policies.",
+        "evidence": "Recovered 90% of the spill regression and beat the Alpha-style policy by 12.7% on the precision microbenchmark."
+      },
+      {
+        "id": "D024-D025",
+        "title": "Design storage for FPGA primitives",
+        "problem": "Async PHT and 6R/3W PRF muxes consumed routing and logic needed by the full MNIST top.",
+        "choice": "Bank the PHT and implement the PRF as replicated M9K write banks with a live-value table.",
+        "evidence": "The PRF change alone removed 8,895 LEs; the full board top moved from 88% to 70% logic use with cycle-identical behavior."
+      },
+      {
+        "id": "D029",
+        "title": "Delete a bypass only after proving it dead",
+        "problem": "The dmem-to-load-to-JALR bypass family became the routed critical path.",
+        "choice": "Prove the WB2 arm unreachable for every valid consumer, then keep the old mux as a permanent simulation oracle.",
+        "evidence": "41,073,750 load writebacks and 47,050,722 tagged select targets in CoreMark produced zero WB2 uses; the 25 MHz build closes with +8.045 ns setup slack."
+      }
+    ],
+    "lessons_title": "What I can defend in an interview",
+    "lessons": [
+      "Why IPC without Fmax is not performance on an FPGA",
+      "How register renaming, recovery, SQ/LQ ordering, and store sets interact",
+      "Why synchronous block RAM changes pipeline contracts",
+      "How lockstep, assertions, independent models, random stress, and coverage catch different bug classes",
+      "How to separate simulation, implementation, and silicon evidence without overclaiming"
+    ]
+  },
+  "evidence": {
+    "page_title": "Reproduce it, inspect it, challenge it",
+    "page_intro": "The portfolio is a map to the evidence, not a replacement for it. The RTL evidence checkpoint and its passing CI run anchor the measured hardware state.",
+    "status_matrix": [
+      {
+        "class": "Measured simulation",
+        "proves": "Functional behavior, cycles, IPC, CoreMark CRCs, NPU equivalence, lockstep",
+        "does_not_prove": "FPGA timing or physical operation"
+      },
+      {
+        "class": "Quartus implementation",
+        "proves": "Fit, resource use, STA, configured clock margin, assembled image",
+        "does_not_prove": "That the image has executed on the board"
+      },
+      {
+        "class": "Hardware-confirmed",
+        "proves": "Observed behavior on the DE10-Lite at the stated clock and image",
+        "does_not_prove": "A newer unflashed image or unsupported software stack"
+      }
+    ],
+    "links": [
+      {
+        "label": "Repository",
+        "display": "github.com/hannaashkar/rv32i_cpu",
+        "url": "https://github.com/hannaashkar/rv32i_cpu"
+      },
+      {
+        "label": "RTL evidence checkpoint",
+        "display": "3c3171f",
+        "url": "https://github.com/hannaashkar/rv32i_cpu/commit/3c3171f"
+      },
+      {
+        "label": "Passing production CI run",
+        "display": "actions/runs/29368469898",
+        "url": "https://github.com/hannaashkar/rv32i_cpu/actions/runs/29368469898"
+      },
+      {
+        "label": "Measured project brief",
+        "display": "docs/PROJECT_BRIEF.md",
+        "url": "https://github.com/hannaashkar/rv32i_cpu/blob/main/docs/PROJECT_BRIEF.md"
+      },
+      {
+        "label": "Verification methodology",
+        "display": "docs/VERIFICATION.md",
+        "url": "https://github.com/hannaashkar/rv32i_cpu/blob/main/docs/VERIFICATION.md"
+      },
+      {
+        "label": "Architecture decisions",
+        "display": "docs/DECISIONS.md",
+        "url": "https://github.com/hannaashkar/rv32i_cpu/blob/main/docs/DECISIONS.md"
+      },
+      {
+        "label": "Bug log",
+        "display": "docs/BUGLOG.md",
+        "url": "https://github.com/hannaashkar/rv32i_cpu/blob/main/docs/BUGLOG.md"
+      },
+      {
+        "label": "D029 proof and timing report",
+        "display": "docs/WB_BYPASS_TIMING.md",
+        "url": "https://github.com/hannaashkar/rv32i_cpu/blob/main/docs/WB_BYPASS_TIMING.md"
+      }
+    ],
+    "commands": [
+      {
+        "command": "make verify",
+        "purpose": "Full in-order system verification"
+      },
+      {
+        "command": "make verify-ooo",
+        "purpose": "OoO units, random stress, and recovery"
+      },
+      {
+        "command": "make coverage",
+        "purpose": "Combined both-core RTL line coverage"
+      },
+      {
+        "command": "make coremark-ooo",
+        "purpose": "Reportable 720-iteration OoO CoreMark run"
+      },
+      {
+        "command": "make npu-mlp-ooo",
+        "purpose": "Bit-exact software versus NPU MNIST run"
+      },
+      {
+        "command": "make synth-fit",
+        "purpose": "Quartus map and fit with logic-budget gate"
+      },
+      {
+        "command": "make synth-sta",
+        "purpose": "All-corner timing and top-path archive"
+      }
+    ],
+    "contact_title": "Hanna Ashkar",
+    "contact_line": "Electrical Engineering - Technion - computer architecture and FPGA systems",
+    "contact_action": "Review the source, CI, measured project brief, and decision record on GitHub."
+  }
+}

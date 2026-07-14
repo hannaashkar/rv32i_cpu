@@ -11,9 +11,10 @@ and the serial violation select was replaced by a fixed 8→4→2→1 minimum-ag
 tree with a simulation-only serial oracle. That change improved board-top
 Fmax **23.51 → 25.10 MHz (+6.8%)** and removed the LQ from every top-20 path.
 
-Current D029 system evidence on local branch `codex/load-wb-bypass-cut` (not
-merged or pushed) adds the cycle-exact SQ selector, IQ top-two tournament, and
-the proven-dead WB2 load-result EX-bypass cut. Both cores pass **21/21
+Current D029 system evidence is merged and pushed on production `main` at
+**`3c3171f`**; GitHub Actions run **29368469898 is green**. It adds the
+cycle-exact SQ selector, IQ top-two tournament, and the proven-dead WB2
+load-result EX-bypass cut. Both cores pass **21/21
 directed+C, 40/40 rv32ui, 25/25 base, 25/25 system-tail, 25/25 NPU/MMIO, and
 84/84 randomized-reset runs**; OoO additionally passes every queue/PRF unit
 model and 25/25 `--vio`, all lockstep-clean. Line coverage is **99.3%
@@ -29,8 +30,8 @@ closes at **25 MHz**, with restricted Fmax **31.29 MHz**, slow-85C setup
 unconstrained paths. The former dmem/load-bypass family is absent from the top
 20; the measured limiter is now `rob_head → IQ readiness/operand selection`
 (worst 31.517 ns). Freshness-clean D029 MNIST `.sof`/`.pof` images are
-assembled but unflashed; hardware truth remains the earlier 16.67 MHz
-LED-walker/CFM image.
+assembled but unflashed. No JTAG hardware was available on 2026-07-15;
+hardware truth remains the earlier 16.67 MHz LED-walker/CFM image.
 
 Historical D020 characterization remains useful: CoreMark (rare violations)
 was **1.026** speculative vs **1.006** conservative IPC (+2.0%), while hello.c

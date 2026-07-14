@@ -47,6 +47,16 @@ come from hardware counters in cycle-accurate simulation. The table labels
 Quartus-only, hardware-confirmed, and pending results separately. Full methods
 and evidence: [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md).
 
+### Recruiter shortcuts
+
+- **[8-page measured portfolio (PDF)](output/pdf/rv32i_soc_portfolio.pdf)** — architecture, results, verification, FPGA evidence, and claim boundaries
+- **[Résumé, LinkedIn, and interview copy](docs/CAREER_PACKET.md)** — quantified bullets, project pitches, and technical interview stories
+- **[Measured project brief](docs/PROJECT_BRIEF.md)** — deeper methods, limitations, and evidence links
+
+The portfolio is generated from the tracked
+[`portfolio/evidence.json`](portfolio/evidence.json) ledger. Rebuild it with
+`python -m pip install -r requirements-portfolio.txt` and `make portfolio`.
+
 ---
 
 ## System at a glance
@@ -223,7 +233,9 @@ tb/verilator/   C++ harness + golden-model ISS (lockstep co-sim)
 sw/       assembly + C tests, C runtime, CoreMark port, MNIST MLP (sim + board)
 synth/    Quartus project for the DE10-Lite (+ checked-in memory images)
 docs/     architecture, measurements, verification, bug/decision logs, project brief
-scripts/  MNIST training/quantization, random test generator, hex→MIF flow
+portfolio/ tracked recruiter-claim evidence ledger
+output/pdf/ generated, recruiter-ready measured portfolio
+scripts/  MNIST training/quantization, random test generator, hex→MIF/PDF flows
 ```
 
 ---
@@ -243,6 +255,7 @@ make npu-tb          # NPU unit testbench vs C++ golden model
 make sq-tb           # SQ public-interface golden model + mandatory coverage bins
 make iq-tb           # IQ lifecycle/selection golden model + all 3×16 winners
 make mif             # rebuild the FPGA memory-init images from the demo binaries
+make portfolio       # rebuild output/pdf/rv32i_soc_portfolio.pdf from tracked evidence
 ```
 
 On the project’s native Windows environment, run the same targets from
