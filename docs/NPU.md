@@ -186,17 +186,22 @@ The array maps to 16 embedded 9×9 multipliers and is integrated with both
 cores. An OoO configuration containing the NPU, M9K-resident program memory,
 PLL, and timing constraints has run on the DE10-Lite at 16.67 MHz and booted
 standalone from internal flash; that hardware proof used the LED walker, not
-NPU inference. The current D028 MNIST top on local branch
-`codex/iq-select-pipeline` (not merged or pushed)—including M9K-initialized
-weights—fits at 35,096 / 49,760 LEs (71%), uses 95 M9Ks and 16 embedded 9×9
-multiplier elements across 9 DSP blocks, reaches 27.02 MHz slow-85C Fmax, and
-closes timing at 16.67 MHz with +22.994 ns setup and +0.372 ns hold slack; all
-paths are constrained. Both full lockstep gates pass, and line coverage is
-99.2% (1522/1534). The IQ is absent from all top-20 paths; the new limiter is
-the dmem-read → load/JALR/redirect → gshare-PHT-address family.
-Freshness-clean PLL-/3 D028 MNIST `.sof` and `.pof` images were assembled from
-MIF stamp `mlp` with 0 errors / 0 warnings, but remain unflashed. The only
-hardware-confirmed OoO image remains the earlier 16.67 MHz LED walker/CFM
-build; the first physical MNIST inference is still pending. The **85.99× /
-93.30×** speedup table above retains its D025 provenance because the full MLP
-benchmark was not rerun for D026, D027, or D028.
+NPU inference. The current D029 MNIST top on local branch
+`codex/load-wb-bypass-cut` (not merged or pushed)—including M9K-initialized
+weights—fits at **34,945 / 49,760 LEs (70%)**, uses **15,140 registers,
+632,444 memory bits, and 16 embedded 9×9 multiplier elements**, and reaches
+**31.29 MHz** slow-85C Fmax. An actual PLL-/2 build closes at **25 MHz** with
+**+8.045 ns** slow-85C setup slack; hold, recovery, and removal are also
+positive, and all paths are constrained. The new top-20 family is
+ROB-head-to-IQ operand readiness, not the deleted memory/load-WB bypass.
+
+D029 removed that bypass only after an edge-by-edge dependency proof and added
+a permanent source-use oracle that reconstructs the old mux priority on every
+valid EX uop. Full unit/system/benchmark gates pass with zero lockstep
+divergence, and line coverage is **99.3% (1596/1607)** across 61 programs per
+core. Freshness-clean PLL-/2 D029 MNIST `.sof` and `.pof` images were assembled
+from MIF stamp `mlp`, but remain unflashed. The only hardware-confirmed OoO
+image remains the earlier 16.67 MHz LED walker/CFM build; the first physical
+MNIST inference is still pending. The **85.99× / 93.30×** speedup table above
+retains its D025 provenance because the full MLP benchmark was not rerun for
+D026–D029.

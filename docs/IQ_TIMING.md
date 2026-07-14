@@ -1,5 +1,13 @@
 # Issue-queue timing rewrite (D028)
 
+> **Historical checkpoint.** D029 has superseded the clock decision and
+> current-build metrics below. It proved the memory/load-WB arm of the generic
+> EX bypass unreachable, removed that dead mux input without changing a cycle,
+> and closed an actual PLL-/2 build at 25 MHz. See
+> [WB_BYPASS_TIMING.md](WB_BYPASS_TIMING.md) for the proof, permanent oracle,
+> fresh verification, and current Quartus evidence. The D028 measurements in
+> this document are intentionally preserved as the before-state.
+
 ## Outcome
 
 D027 left one clear timing wall: every top-20 setup path began at `rob_head`,
@@ -121,6 +129,8 @@ These images are **unflashed**: they are build artifacts, not silicon evidence.
 Hardware truth remains the earlier 16.67 MHz LED-walker/CFM bring-up; MNIST has
 not yet run on the board.
 
-The next measured timing task is D029: shorten the new load/JALR/redirect/PHT
-address path. Reconsider a registered IQ scheduler only if a later routed
-report puts the IQ back on the wall or broader frequency goals require it.
+At this D028 checkpoint, the next measured task was D029: shorten the new
+load/JALR/redirect/PHT address path. D029 has since completed that work and
+promoted the build to PLL /2; see the current-status pointer at the top.
+Reconsider a registered IQ scheduler only if a later routed report puts the IQ
+back on the wall or broader frequency goals require it.

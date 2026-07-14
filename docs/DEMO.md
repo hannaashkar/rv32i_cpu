@@ -7,23 +7,29 @@ the acceptance step. **The MNIST bitstream now builds** — D024 first made
 the design routable by moving the gshare PHT into M9Ks; D025 then moved the
 6R/3W PRF into 18 M9Ks, D026 balanced the LQ selector, D027 balanced the SQ
 selector, and D028 replaced the IQ port-1 clear-and-repick chain with a
-cycle-exact top-two tree. The current top on local branch
-`codex/iq-select-pipeline` (not merged or pushed) fits at **35,096 / 49,760
-LEs (71%)**, reaches **27.02 MHz** slow-85C Fmax, and closes timing at
-16.67 MHz with **+22.994 ns** setup and **+0.372 ns** hold slack; every path
-is constrained. Both full lockstep gates pass, and line coverage is **99.2%
-(1522/1534)**. The IQ is absent from all top-20 paths; the new limiter is the
-dmem-read → load/JALR/redirect → gshare-PHT-address family. Freshness-clean
-D028 MNIST `.sof` and `.pof` images were assembled from MIF stamp `mlp` with
-0 errors / 0 warnings, but remain **unflashed**. Hardware truth is still the
-earlier 16.67 MHz LED-walker/CFM image; MNIST has not run on silicon. Before
+cycle-exact top-two tree. D029 then proved that the memory/load-WB arm of the
+generic EX bypass could never win, added a permanent source-use oracle, and
+removed the dead mux input without changing a cycle.
+
+The current top on local branch `codex/load-wb-bypass-cut` (not merged or
+pushed) fits at **34,945 / 49,760 LEs (70%)**, uses **15,140 registers,
+632,444 memory bits, and 16 multiplier elements**, and reaches **31.29 MHz**
+slow-85C Fmax. The actual PLL-/2 build closes at **25 MHz** with **+8.045 ns**
+slow-85C setup slack; hold, recovery, and removal are also positive, and every
+path is constrained. Both full lockstep gates pass, and line coverage is
+**99.3% (1596/1607)** across 61 programs per core. Freshness-clean D029 MNIST
+`.sof` and `.pof` images were assembled from MIF stamp `mlp`, but remain
+**unflashed**. Hardware truth is still the earlier 16.67 MHz LED-walker/CFM
+image; MNIST has not run on silicon. Before
 D024 it failed to route at 96% LEs — if you are on an older checkout and hit
 "Can't route", that is why. If anything surprises you, the board state
 section at the bottom is the first thing to check.
 
 The board top (`rtl/top/de10_top.v`) is the **2-wide out-of-order core**
-with the store-set predictor and the NPU, clocked at **16.67 MHz** (PLL /3
-from the 50 MHz oscillator). Which *program* the FPGA runs is decided at
+with the store-set predictor and the NPU. The current source is configured for
+**25 MHz** (PLL /2 from the 50 MHz oscillator); this is timing-clean but not
+yet hardware-confirmed. It is a 50% configured-clock increase over the
+hardware-proven 16.67 MHz image. Which *program* the FPGA runs is decided at
 compile time by the MIF images in `synth/`:
 
 | `make` target | Program in the bitstream |
@@ -61,7 +67,8 @@ it enters the interactive loop:
 - **SW[2:0]** selects one of 8 handwritten-digit images (from the MNIST
   test set, baked into the data memory at synthesis).
 - The CPU drives the NPU through the two matrix multiplies of a quantized
-  784→32→10 network (~47k cycles ≈ 3 ms at 16.67 MHz — instant) and shows:
+  784→32→10 network (~47k cycles ≈ 1.9 ms at the configured 25 MHz;
+  simulation-derived until the board acceptance run) and shows:
 
 ```
   HEX5          HEX2      HEX0
@@ -95,7 +102,7 @@ walker runs, fetch/PLL/timing are healthy.
 
 - Displays dark + LEDs dead → press KEY0 (reset). Still dead → reflash.
 - The last documented `.pof` programmed and verified in the MAX 10 flash is
-  the earlier 16.67 MHz OoO LED walker/CFM image—not D027 and not MNIST
+  the earlier 16.67 MHz OoO LED walker/CFM image—not D029 and not MNIST
   inference. Check `git log synth/` to correlate any later manually
   programmed bitstream.
 - Pin assignments in `synth/rv32i_cpu.qsf` are copied from the proven

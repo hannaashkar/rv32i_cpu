@@ -716,7 +716,7 @@ coremark-ooo:
 	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO) CM_ITER=$(CM_ITER)
 coremark-quick-ooo:
 	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO) CM_ITER=10 CM_REQUIRE_REPORT=0
-verify-ooo: lq-tb sq-tb iq-tb regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo
+verify-ooo: prf-tb lq-tb sq-tb iq-tb regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo
 .PHONY: sim-ooo regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo \
 	    coremark-ooo coremark-quick-ooo verify-ooo
 

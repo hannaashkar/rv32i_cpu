@@ -11,24 +11,26 @@ and the serial violation select was replaced by a fixed 8→4→2→1 minimum-ag
 tree with a simulation-only serial oracle. That change improved board-top
 Fmax **23.51 → 25.10 MHz (+6.8%)** and removed the LQ from every top-20 path.
 
-Current D028 system evidence on local branch `codex/iq-select-pipeline` (not
-merged or pushed) adds the cycle-exact SQ selector and IQ top-two tournament,
-with independent 300,087-cycle `sq-tb` and 300,553-cycle `iq-tb` models. Both
-cores pass 20/20 directed+C, 40/40 rv32ui, 25/25 base, 25/25 system-tail,
-25/25 NPU/MMIO, and 80/80 randomized-reset runs; OoO additionally passes all
-LQ/SQ/IQ units and 25/25 `--vio`, all lockstep-clean. Line coverage is **99.2%
-(1522/1534)**. Reportable CoreMark is cycle-exact to D027 at **1.422552
-CoreMark/MHz, IPC 1.026, 506,197,207 cycles, and 519,453,600 retired
-instructions lockstep-checked**. The D028 board top fits at **35,096 LEs
-(71%)**, 95 M9Ks, and 16 embedded 9×9 multiplier elements (9 DSP blocks);
-slow-85C Fmax is **27.02 MHz**, with +22.994 ns setup and +0.372 ns hold slack
-at PLL /3, and all paths constrained. The LQ, SQ, and IQ selector chains are
-absent from all top-20 paths. The new measured limiter is the dmem-read →
-load/JALR/redirect → gshare-PHT-address family (36.433–36.132 ns), so queue
-selection is no longer the next timing target. PLL /2 remains rejected: its
-2.994 ns theoretical setup margin narrowly misses the 3 ns signoff gate.
-Freshness-clean D028 MNIST `.sof`/`.pof` images are assembled but unflashed;
-hardware truth remains the earlier LED-walker/CFM image.
+Current D029 system evidence on local branch `codex/load-wb-bypass-cut` (not
+merged or pushed) adds the cycle-exact SQ selector, IQ top-two tournament, and
+the proven-dead WB2 load-result EX-bypass cut. Both cores pass **21/21
+directed+C, 40/40 rv32ui, 25/25 base, 25/25 system-tail, 25/25 NPU/MMIO, and
+84/84 randomized-reset runs**; OoO additionally passes every queue/PRF unit
+model and 25/25 `--vio`, all lockstep-clean. Line coverage is **99.3%
+(1596/1607)** across 61 programs/core. Reportable CoreMark remains cycle-exact
+at **1.422552 CoreMark/MHz, IPC 1.026, 506,197,207 cycles, and 519,453,600
+retired instructions lockstep-checked**. D029's permanent exact source-use
+oracle exercises all six select-port/source bins and reports zero cases where
+the removed WB2 arm would have won.
+
+The D029 board top fits at **34,945 LEs (70%)**. Actual PLL-/2 multi-corner STA
+closes at **25 MHz**, with restricted Fmax **31.29 MHz**, slow-85C setup
+**+8.045 ns**, hold **+0.339 ns**, every timing class positive, and zero
+unconstrained paths. The former dmem/load-bypass family is absent from the top
+20; the measured limiter is now `rob_head → IQ readiness/operand selection`
+(worst 31.517 ns). Freshness-clean D029 MNIST `.sof`/`.pof` images are
+assembled but unflashed; hardware truth remains the earlier 16.67 MHz
+LED-walker/CFM image.
 
 Historical D020 characterization remains useful: CoreMark (rare violations)
 was **1.026** speculative vs **1.006** conservative IPC (+2.0%), while hello.c

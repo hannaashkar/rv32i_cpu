@@ -20,13 +20,13 @@ actually run on the board.
 | Domain | Result | Evidence status |
 |---|---|---|
 | Tagged CPU milestones | 1.177 → 1.397 CoreMark/MHz (**+18.8%**); IPC 0.849 → 1.008 | Reportable, CRC-validated runs at `v1.0-inorder-baseline` and `v2.0-ooo` |
-| Current D028 CPU A/B | **1.176568 → 1.422552 CoreMark/MHz (+20.91%)**; IPC 0.849 → 1.026 | Exact same 720-iteration image; OoO: 506,197,207 cycles / 519,453,600 lockstep comparisons, official CRCs; cycle-exact to D027 |
+| Current D029 CPU A/B | **1.176568 → 1.422552 CoreMark/MHz (+20.91%)**; IPC 0.849 → 1.026 | Exact same 720-iteration image; OoO: 506,197,207 cycles / 519,453,600 retired instructions, official CRCs and zero lockstep divergence; cycle-exact to D028 |
 | Latest NPU A/B | **85.99× / 93.30×** cycle-speedup on in-order / OoO; software and NPU logits bit-exact on **32/32** exported images | D025 cycle-accurate simulation + retirement lockstep |
 | Model accuracy | **97.13%** integer accuracy on all 10,000 MNIST test images | Offline integer reference; not presented as a 10,000-image RTL run |
-| Verification | 20/20 directed+C, 40/40 `riscv-tests` rv32ui, 25/25 base/sys/NPU random and 80/80 X/reset per core; OoO LQ/SQ/IQ units + 25/25 violation stress; **99.2% RTL line coverage (1522/1534)** | D028 full unit/system/benchmark gates green, zero divergence, 60 coverage programs/core and zero failures |
-| Current FPGA build | **35,096 / 49,760 LEs (71%)**, 632,444 memory bits, 16 multiplier elements; **27.02 MHz Fmax**, +22.994 ns at 16.67 MHz | Quartus fitter + slow-85C STA, D028; IQ absent from top 20, all paths constrained |
+| Verification | 21/21 directed+C, 40/40 `riscv-tests` rv32ui, 25/25 base/sys/NPU random and 84/84 X/reset per core; OoO LQ/SQ/IQ units + 25/25 violation stress; **99.3% RTL line coverage (1596/1607)** | D029 full unit/system/benchmark gates green, zero divergence, 61 coverage programs/core and zero failures |
+| Current FPGA build | **34,945 / 49,760 LEs (70%)**, 15,140 registers, 632,444 memory bits, 16 multiplier elements; **31.29 MHz Fmax** | Actual D029 PLL-/2 build closes at **25 MHz** with +8.045 ns slow-85C setup; every timing class positive and zero unconstrained paths |
 | Physical hardware | In-order at **50 MHz**; OoO revision at **16.67 MHz** with M9K code and internal-flash boot | DE10-Lite hardware-confirmed with bring-up program |
-| MNIST on board | Freshness-clean D028 PLL-/3 `.sof`/`.pof` assembled from MIF stamp `mlp`; unflashed | First physical inference/demo still pending; build artifact is not silicon evidence |
+| MNIST on board | Freshness-clean D029 PLL-/2 `.sof`/`.pof` assembled from MIF stamp `mlp`; unflashed | First physical inference/demo still pending; 25 MHz build artifact is not silicon evidence |
 
 ## Architecture
 
@@ -51,8 +51,10 @@ The first OoO FPGA port improved IPC but reached only 8.42 MHz because the
 16-entry issue selection path was a serial priority chain. Replacing it with a
 balanced lower-index-preserving tree raised characterized Fmax to 19.65 MHz
 (2.33×) without changing a cycle in lockstep simulation. The result is also an
-honest negative finding: at 16.67 MHz, the OoO core still loses wall-clock
-throughput to the 50 MHz in-order core. See [DECISIONS.md](DECISIONS.md), D019.
+honest negative finding: the hardware-confirmed 16.67 MHz OoO core still loses
+wall-clock throughput to the 50 MHz in-order core. D029 now closes a 25 MHz
+image, but that image remains unflashed and would still not erase the full
+frequency gap. See [DECISIONS.md](DECISIONS.md), D019 and D029.
 
 ### A 6R/3W FPGA physical register file
 
@@ -93,15 +95,44 @@ rose to **27.02 MHz**, and the IQ disappeared from every top-20 path. The new
 limiter is a dmem-M9K-read to load/JALR/redirect to gshare-PHT-address family at
 36.433–36.132 ns. The more disruptive registered scheduler pipeline is
 deferred because it no longer attacks the measured wall. Both-core unit/system
-gates and fresh **99.2% (1522/1534)** coverage are green with zero divergence.
+gates and D028's **99.2% (1522/1534)** coverage are green with zero divergence.
 Reportable CoreMark is cycle-exact to D027 at **1.422552 CoreMark/MHz, IPC
 1.026, 506,197,207 cycles, and 519,453,600 lockstep comparisons**, with
 official CRCs. See [IQ_TIMING.md](IQ_TIMING.md).
 
-A final post-RTL map+fit rerun reproduced the documented D028 results exactly.
-With MIF stamp `mlp`, assembly completed at 22:44:32 with 0 errors / 0
-warnings and produced fresh PLL-/3 MNIST `.sof`/`.pof` files. They are
-unflashed; hardware truth remains the earlier LED-walker/CFM bring-up.
+### A deleted bypass justified by proof, not hope
+
+D029 attacked the next routed wall without adding latency. The old generic EX
+operand mux could choose a memory/load result directly from writeback port 2,
+but an edge-by-edge pipeline proof showed that an issued dependent cannot reach
+EX until the PRF direct/shadow path already holds the same value. This covers
+resident and same-edge-dispatched consumers, RAM and SQ-forwarded loads,
+MMIO/NPU loads, replay, flush, and tag reuse.
+
+The optimization remains continuously falsifiable: a Verilator-only oracle
+shadows the decoder's exact source-use bits by ROB tag, reconstructs the former
+bypass priority for every valid EX uop, and stops the run if the deleted arm
+would ever win. The new directed test exercises both source inputs on all three
+issue ports, load-to-branch/JALR/ALU/store dependencies, both branch outcomes,
+and warm/cold indirect control flow. Across reportable CoreMark, **41,073,750
+load writebacks** execute while the deleted bypass records **zero uses**.
+
+Behavior is cycle-exact to D028: `hello.c` remains **2,013 cycles / 1,882
+instructions**, and reportable CoreMark remains **1.422552 CoreMark/MHz, IPC
+1.026, 506,197,207 cycles, and 519,453,600 retired instructions** with the
+official CRCs and zero lockstep divergence. Fresh combined coverage rises to
+**99.3% (1596/1607)** across 61 programs per core.
+
+The physical result is equally direct: the complete OoO+NPU+MNIST top fits in
+**34,945 / 49,760 LEs (70%)**, with 15,140 registers, 632,444 memory bits, and
+16 embedded multiplier elements. An actual PLL-/2 build reaches **31.29 MHz
+Fmax** and closes at **25 MHz** with **+8.045 ns** slow-85C setup slack. Hold,
+recovery, and removal are also positive, and there are zero unconstrained
+paths. That is a **50% configured-clock increase** without losing one
+benchmark cycle. Fresh MLP
+`.sof` and `.pof` files were assembled, but remain unflashed. Hardware truth is
+still the earlier 16.67 MHz LED-walker/CFM bring-up. See
+[WB_BYPASS_TIMING.md](WB_BYPASS_TIMING.md).
 
 ### Recovery stress found a non-obvious stale-uop bug
 
@@ -148,13 +179,13 @@ runs that exact image on both cores, and preserves `coremark-inorder.log` and
 `coremark-ooo.log` separately.
 
 The 2026-07-14 same-image control measured **58.828385 iterations/s** on the
-in-order core and **71.127589 iterations/s** on the D028 OoO core at the common
+in-order core and **71.127589 iterations/s** on the D029 OoO core at the common
 50 MHz reporting reference: 1.176568 versus 1.422552 CoreMark/MHz. Both runs
 printed `Correct operation validated` and matched all official 2K CRCs. The
 OoO run completed 720 iterations in 10.122654 seconds from 506,132,722
 benchmark ticks; the full harness measured 506,197,207 cycles and 519,453,600
-lockstep comparisons with no divergence. D028 is cycle-exact to D027 (which is
-cycle-exact to D026) on this benchmark.
+retired instructions with no lockstep divergence. D029 is cycle-exact to D028
+(which is cycle-exact to D027 and D026) on this benchmark.
 
 The historical +18.8% comparison belongs to the tagged milestone. At
 `v2.0-ooo`, reproduce it with `make verify-ooo && make coremark-ooo
@@ -168,23 +199,23 @@ CM_ITER=720`; the baseline method and exact run context are in
   current implementation. This is not a Linux-capable platform.
 - The 40/40 result is the integer `riscv-tests` rv32ui suite, not a full
   privileged/compliance certification.
-- 99.2% (1522/1534 on D028) is combined Verilator RTL **line** coverage, not
-  functional or formal coverage. Every D028 IQ addition is covered; the same
-  12 documented lines remain uncovered.
+- 99.3% (1596/1607 on D029) is combined Verilator RTL **line** coverage, not
+  functional or formal coverage. The proof oracle and all six load-consumer
+  operand bins are covered; 11 documented lines remain uncovered.
 - NPU speedups are hardware-counter measurements in cycle-accurate RTL
   simulation. The full-dataset 97.13% result is the offline integer model;
   the on-core comparison covers 32 exported images, and the board image embeds
   eight.
-- Fresh D028 MNIST `.sof`/`.pof` files have routed, complete merge-gate, and
+- Fresh D029 MNIST `.sof`/`.pof` files have routed, complete merge-gate, and
   input-to-assembly freshness evidence. They remain unflashed, so they have no
   physical-demo evidence. The older OoO bring-up image
   proved fetch, timing, and CFM boot
   on silicon with the LED walker; it did not exercise NPU inference.
-- D026–D028 removed the LQ, SQ, and IQ selector chains from every top-20 path.
-  D028 reaches **27.02 MHz** slow-85C Fmax; the new limiter is the
-  dmem/load/JALR/redirect/PHT-address path. The board remains at 16.67 MHz
-  because the theoretical +2.994 ns margin at 25 MHz is narrowly below the
-  ≥3 ns PLL /2 sign-off gate.
+- D026–D029 removed the LQ, SQ, IQ-repick, and dead memory-writeback bypass
+  chains from the measured timing wall. D029 reaches **31.29 MHz** slow-85C
+  Fmax and closes an actual 25 MHz PLL-/2 build with +8.045 ns setup slack.
+  The new top-20 family is ROB-head-to-IQ operand readiness. The physical board
+  remains confirmed only at 16.67 MHz until the 25 MHz image is flashed.
 
 ## Evidence index
 
@@ -195,6 +226,7 @@ CM_ITER=720`; the baseline method and exact run context are in
 - PRF implementation and Quartus result: [PRF_SHRINK.md](PRF_SHRINK.md)
 - SQ timing rewrite and proof: [SQ_TIMING.md](SQ_TIMING.md)
 - IQ timing rewrite and proof: [IQ_TIMING.md](IQ_TIMING.md)
+- Load-writeback bypass proof and 25 MHz build: [WB_BYPASS_TIMING.md](WB_BYPASS_TIMING.md)
 - Board acceptance state: [DEMO.md](DEMO.md)
 - Architectural decisions: [DECISIONS.md](DECISIONS.md)
 - Root-caused bugs: [BUGLOG.md](BUGLOG.md)

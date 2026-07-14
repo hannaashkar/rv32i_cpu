@@ -5,6 +5,97 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D029 — 2026-07-14 — Remove proven-dead WB2 EX bypass; promote the OoO board clock from 16.67 MHz to timing-clean 25 MHz
+
+**Decision:** remove only the memory/load-result (WB2) arm from the generic EX
+operand bypass, retain both ALU-result arms, and promote the board PLL from /3
+to /2 after a real 25 MHz fit passes the project's timing-margin gate. Hanna
+delegated the performance-phase architecture call. D028's top-20 paths all ran
+from synchronous dmem through `wb_result2`, the generic operand mux,
+JALR/redirect logic, and the predictor, with a 36.433 ns worst path. Four
+options were evaluated:
+
+1. Mark the path false. Rejected because load consumers are legal; a false
+   path would hide live logic from STA without shortening it.
+2. Delay load dependants by one cycle. Rejected because it adds a load-use
+   bubble and changes IPC to avoid an overlap that the pipeline already makes
+   unreachable.
+3. Register/pipeline the load-to-redirect path. Deferred as a broader future
+   frequency option because it changes branch resolution, predictor alignment,
+   recovery timing, and IPC.
+4. Prove and remove only the unreachable WB2 mux arm. Selected because it cuts
+   the measured cone without adding state, latency, or scheduling rules.
+
+**Exact proof:** a successful memory-port load asserts its IQ wake while in EX
+and is captured into WB2 at edge E1. Only after E1 can a resident or same-edge-
+dispatched consumer become selectable. The earliest consumer is in SEL during
+E1-E2, enters RF at E2, and first reaches EX at E3. At E2 the load writes the
+PRF and its value enters the PRF's one-cycle shadow, which repairs the M9K
+OLD_DATA read for the dependent RF cycle. By E3 the load has left WB2, so the
+old WB2 EX-bypass predicate cannot win. Later consumers use the shadow or M9K
+bank. RAM, SQ-forwarded, MMIO, and NPU loads share this wake/SEL/RF/EX timing;
+a replayed load generates neither successful wake nor valid WB write. Flushes
+do not skip RF, and full ROB tags make reuse explicit.
+
+**Permanent oracle and directed proof:** Verilator-only **INV-B0** carries the
+decoder's exact `rs1_used`/`rs2_used` bits in a full-ROB-tagged shadow and
+proves source-shadow identity at EX. **INV-B1** mirrors the old WB0 -> WB1 ->
+WB2 priority and fatals if WB2 would win for either consumed source on any
+valid EX uop, including a same-cycle-killed uop. Positive counters prove the
+tests hit the immediately preceding SEL overlap. The new 24-check
+`load_wb_bypass.S` covers JALR bit clearing and signed immediates, a loaded
+return, cold/warm indirect control, all six branches in both outcomes with
+both source positions, both ALU ports and inputs, and store address/data. Its
+OoO run is 389 measured cycles / 177 instret and reports **26 load WBs, 26
+WB2-tagged SEL targets, all six bins (`3f`), 287 consumed EX operands, 27 real
+WB0/WB1 hits, and 0 WB2 hits**. Policies 0/1/2/3 all reach all six bins with
+zero WB2 hits.
+
+**Verification:** PRF/LQ/SQ/IQ public-interface models pass respectively
+300,014 / 250,026 / 300,087 / 300,553 cycles or ticks with zero failures. Both
+cores pass 21/21 directed+C, 40/40 rv32ui, 25/25 base random, 25/25
+system/decode-tail random, 25/25 NPU/MMIO random, and 84/84 randomized-X/reset;
+OoO also passes 25/25 violation stress, and alternate load policies are
+spot-regressed. Every system run is retirement-lockstep clean. Fresh combined
+coverage is **99.3% (1596/1607)** across 61 programs per core with zero test
+failures. No new bug was found.
+
+**Performance:** `hello.c` remains cycle-exact at **2,013 cycles / 1,882
+instret**. Reportable 720-iteration CoreMark is also cycle-exact to D028:
+**506,132,722 ticks, 10.122654 s, 71.127589 iterations/s at the common 50 MHz
+reporting reference = 1.422552 CoreMark/MHz, 506,197,207 full-run cycles,
+519,453,600 instret/lockstep comparisons, and IPC 1.026**. All official CRCs
+and validation checks pass. The printed rate is not a 25 MHz board
+measurement; the cycle-equivalent 25 MHz expectation is about 35.56
+iterations/s.
+During that run INV-B1 observes 41,073,750 load writebacks, 47,050,722
+WB2-tagged SEL targets, all six SEL bins, 760,546,213 consumed EX operands,
+179,766,342 live WB0/WB1 hits, and **zero WB2 hits**.
+
+**Quartus and clock call:** the conservative /3 characterization maps 37,676
+LEs, fits **34,886 / 49,760 LEs (70%)**, and reaches **29.14 MHz Fmax**. Its
+slow-85C setup/hold/recovery/removal slacks are +25.678 / +0.397 / +52.039 /
++1.583 ns. The projected /2 setup margin was +5.678 ns, clearing the required
+`>=3 ns` and preferred `>=5 ns` gates, so the projection was tested physically
+in place-and-route. The actual PLL-/2 build maps 37,688 LEs, fits **34,945 /
+49,760 LEs (70%)**, reports **31.29 MHz Fmax**, and at **25 MHz** has slow-85C
+setup/hold/recovery/removal slacks of **+8.045 / +0.339 / +34.440 / +1.506
+ns**. All corners pass and all five unconstrained counts are zero. Its top-20
+paths are now `rob_head` -> IQ readiness (31.517 ns worst); the dmem/WB2 family
+is absent. The shipping build clock is therefore promoted to **25 MHz**, a 50%
+clock increase with cycle-identical performance.
+
+**Physical freshness:** with MIF stamp `mlp`, final assembly succeeds with 0
+errors / 0 warnings. SHA-256 is
+`1ECB4B6D8E450587CC6F96C13D3008CDC90CE1DED64137D8C82B6786DE14E85D` for the
+3,216,563-byte `.sof` and
+`C2F40218950DE037BF214ABEBA6A83392F81744E10D627043C96CF7414439C75` for the
+1,450,248-byte `.pof`. These 25 MHz MNIST images are **not yet flashed**.
+Silicon truth remains the earlier 16.67 MHz OoO LED-walker/CFM demonstration;
+25 MHz hardware acceptance and MNIST remain physical next steps. Full design,
+proof, tests, coverage, timing, and image evidence:
+**[WB_BYPASS_TIMING.md](WB_BYPASS_TIMING.md)**.
+
 ## D028 — 2026-07-14 — IQ port-1 clear-and-repick chain → cycle-exact balanced top-two tournament; scheduler pipeline deferred after IQ leaves the timing wall
 
 **Decision:** replace the issue queue's dependent `pick → one-hot clear →

@@ -733,8 +733,45 @@ pushed; merge gate COMPLETE; fresh bitstreams UNFLASHED):**
   evidence; hardware truth is still the earlier LED-walker/CFM image. Full
   record: `docs/IQ_TIMING.md`, DECISIONS D028.
 
+**2026-07-14 (latest) — D029 dead load-result bypass cut + 25 MHz board build
+(branch `codex/load-wb-bypass-cut`, stacked on D028; LOCAL, NOT merged or
+pushed; merge gate COMPLETE; fresh bitstreams UNFLASHED):**
+- D028's full top-20 family crossed dmem M9K read → WB2 load-result generic EX
+  bypass → JALR/redirect → gshare PHT address. An edge-by-edge scheduler/PRF
+  proof showed WB2 is unreachable: a successful load wakes dependents as it
+  enters WB, the earliest consumer reads the result from the folded PRF
+  direct/shadow path, and reaches EX only after the load has left WB. D029
+  removes **only** WB2; WB0/WB1 ALU bypasses remain.
+- This is guarded permanently, not assumed: an exact ROB-tagged decoder
+  source-use shadow (INV-B0) and old-priority bypass oracle (INV-B1) check every
+  valid EX uop, including killed uops. Full verification and reportable
+  CoreMark exercise **all six select-port/source bins with zero WB2 hits**.
+  During CoreMark the oracle observes 41,073,750 load writebacks and 47,050,722
+  load-targeting selections.
+- New `sw/tests/load_wb_bypass.S`: **24 checks** covering load→JALR (cold/warm,
+  signed immediates, loaded return), all six branch conditions and both
+  outcomes, both ALU operands/ports, and store address/data. Both cores pass
+  **21/21 directed+C + 40/40 rv32ui + 25/25 base/system/NPU random + 84/84
+  X/reset**; OoO also passes PRF/LQ/SQ/IQ unit models and 25/25 violation
+  stress, all lockstep-clean.
+- Performance is cycle-exact: `hello.c` **2013 cycles / 1882 instret**;
+  reportable CoreMark **1.422552 CoreMark/MHz, IPC 1.026, 506,197,207 cycles,
+  519,453,600 instret**, official CRCs and zero divergence. Fresh line coverage
+  is **99.3% (1596/1607)** across 61 programs/core, zero failures.
+- Final actual PLL-/2 board fit/STA: **34,945/49,760 LEs (70%)**, 15,140
+  registers, 632,444 memory bits, 16 multiplier elements; restricted Fmax
+  **31.29 MHz**. At the new **25 MHz** clock, slow-85C setup is **+8.045 ns**,
+  hold +0.339 ns, recovery +34.440 ns, removal +1.506 ns; every timing class is
+  positive and there are zero unconstrained paths. The old dmem/WB2 family is
+  absent; the new limiter is `rob_head → IQ readiness` (worst 31.517 ns).
+- `quartus_asm` completed with 0 errors / 0 warnings and fresh MNIST `.sof` /
+  `.pof` images. This proves a **50% clock increase** in build/STA evidence,
+  not yet on silicon. Hardware truth remains the earlier 16.67 MHz OoO
+  LED-walker/CFM image until Hanna flashes D029. Full record:
+  `docs/WB_BYPASS_TIMING.md`, DECISIONS D029.
+
 **Next → see `docs/NEXT.md` (the start-here backlog).** In brief:
-(0) **Flash the MNIST demo** — `.sof` is built; DEFERRED by Hanna
+(0) **Flash the 25 MHz D029 MNIST demo** — `.sof` is built; DEFERRED by Hanna
 2026-07-12, it's her hardware step (USB-Blaster → digit demo → video).
 Do NOT auto-do. (1) ~~PRF→M9K LVT~~ **DONE + merged (D025, `ab79b50`,
 −8,895 LEs → 70%, IPC-neutral).** (2) ~~LQ timing tree~~ **DONE D026;
@@ -743,13 +780,17 @@ full-gate green, PLL /3 retained, local/not merged or pushed.** (4) ~~IQ
 top-two tree D028~~ **DONE** — full unit/system/benchmark lockstep gates,
 fresh coverage, hello.c, fit, and STA green; local/not merged or pushed, with
 freshness-clean D028 MNIST bitstreams assembled but unflashed.
-(5) **D029 load/JALR/redirect/PHT path** — current measured limiter; characterize
-before changing RTL. True scheduler pipelining is deferred because IQ is gone
-from the top 20. (6) IQ payload split (~3k
+(5) ~~D029 dead WB2 load-result bypass cut~~ **DONE** — exact source-use oracle,
+all functional/benchmark/coverage gates, actual PLL-/2 fit/STA, and fresh
+25 MHz images green; local/not merged or pushed, unflashed. (6) **New
+`rob_head → IQ readiness` limiter** — characterize before changing latency;
+consider the cycle-safe head/relage cut versus a true scheduler pipeline, plus
+the IQ payload split (~3k
 LEs). (7) Small infra: NPU on-board error patterns, `make -j` suites,
 loop/call-tree/RAS random coverage, INV-G2 negative self-test. **Env note:**
 the two old build landmines are
 GUARDED IN THE MAKEFILE — `make` just works; if overriding, VERILATOR_ROOT
 must be `/ucrt64/share/verilator` (mount form). D024/D025 are merged;
-D026+D027 are committed locally; D028 is active on `codex/iq-select-pipeline`;
+D026+D027+D028 are committed locally; D029 is active on
+`codex/load-wb-bypass-cut`;
 physical flashing remains Hanna's deferred hardware step.

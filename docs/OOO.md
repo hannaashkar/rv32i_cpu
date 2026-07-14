@@ -31,6 +31,21 @@
 > official CRCs and zero divergence. D028 is fully signed off but remains
 > local—not merged or pushed. Freshness-clean MNIST `.sof`/`.pof` images are
 > assembled at PLL /3 but unflashed, so D028 is not hardware-confirmed.
+>
+> **Current implementation note (D029).** The generic EX bypass retains the
+> WB0/WB1 ALU-result arms but no longer includes WB2's load result. Loads wake
+> dependents only when the result enters WB; the earliest consumer reads the
+> same value through the folded PRF direct/shadow path and cannot reach EX
+> while the producer remains in WB. A permanent ROB-tagged source-use shadow
+> plus exact old-priority oracle fatals if WB2 would ever win; the full gate and
+> CoreMark exercise all six select-port/source bins with zero hits. The new
+> 24-check directed regression covers load→JALR, every branch condition and
+> outcome, both ALU inputs/ports, and store address/data. D029 is cycle-exact,
+> raises current coverage to 99.3% (1596/1607), and closes an actual PLL-/2
+> board fit at 25 MHz: 34,945 LEs (70%), Fmax 31.29 MHz, slow-85C setup
+> +8.045 ns. Fresh `.sof`/`.pof` images are unflashed; physical truth remains
+> the earlier 16.67 MHz OoO LED-walker/CFM image. See
+> **[WB_BYPASS_TIMING.md](WB_BYPASS_TIMING.md)** and D029.
 
 ## Measured result (2026-07-03, same binary as the baseline)
 
@@ -93,7 +108,8 @@ IS (select ≤3: port0 ALU+branch/JALR, port1 ALU+CSR, port2 AGU/mem;
     can replay)
 RF (PRF read, 6R; write-first internal bypass)
 EX (ALUs, branch resolve vs prediction, AGU + SQ forward-check + dmem
-    read; WB-stage result bus bypasses into EX operands)
+    read; WB0/WB1 ALU result buses bypass into EX operands, while load
+    results arrive through the folded PRF direct/shadow path per D029)
 WB (PRF write 3W; ROB done + result value; load tag broadcast)
 RT (retire ≤2 in order from ROB head; ≤1 store/cycle -> SQ commit to
     dmem/mmio; free old ptag; free checkpoint; instret += count)
