@@ -508,7 +508,11 @@ module ooo_cpu #(
                               : 6'd0;
     wire [5:0] old1  = (dr_wr0 && (dr_rd1 == dr_rd0)) ? pd0 : rat[dr_rd1];
 
-    // grant/WB tag clears visible to dispatch-ready computation
+    // IQ grants and successful load-completion wake. Before D030, rdy_now()
+    // also bypassed these CURRENT events into dispatch readiness. The IQ now
+    // captures them locally and applies them in the dispatched uop's first
+    // resident cycle, so keeping that bypass would preserve an alternate
+    // grant-to-dispatch-ready timing path.
     wire        sel0_v, sel1_v, sel2_v;
     wire [`UOPW-1:0] sel0_uop, sel1_uop, sel2_uop;
     reg         wb_v2_isload_wr;    // load WB this cycle (declared below)
@@ -521,10 +525,7 @@ module ooo_cpu #(
             if (!used || ps == 6'd0)
                 rdy_now = 1'b1;
             else
-                rdy_now = !busy[ps]
-                    || (sel0_v && sel0_uop[`U_WR] && sel0_uop[`U_PD] == ps)
-                    || (sel1_v && sel1_uop[`U_WR] && sel1_uop[`U_PD] == ps)
-                    || (wb_v2_isload_wr && wb_pd2_r == ps);
+                rdy_now = !busy[ps];
         end
     endfunction
 

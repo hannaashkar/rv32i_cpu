@@ -264,7 +264,7 @@ sq-tb: $(SQ_TB)
 	./$(SQ_TB)
 .PHONY: sq-tb
 
-# --- issue-queue unit testbench (D028 scheduler tournament/pipeline) ----------
+# --- issue-queue unit testbench (D030 wake-retiming + D028 tournament) --------
 # Public-interface lifecycle/selection model.  It checks the complete 162-bit
 # selected payload, exact modular-age/port arbitration, wakeup, wait masks,
 # replay, and both recovery paths over directed cases + 300k random cycles.

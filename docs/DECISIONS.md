@@ -5,6 +5,43 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D030 — 2026-07-15 — Retiming-register IQ wake events while preserving the D029 schedule cycle for cycle
+
+**Decision:** capture the two select-time ALU/control destination broadcasts
+and the successful load-completion/EX-success broadcast in three 7-bit `{valid, tag}`
+registers. During the following cycle, IQ eligibility uses stored readiness OR
+a captured-tag match, and that match is persisted into stored readiness at the
+next edge. Dispatch writes only busy-table/unused-source readiness (with the
+existing slot-1 same-pair dependency forced unready); its first resident cycle
+consumes the event captured on its dispatch edge. The redundant current-wake
+arms in `ooo_cpu.rdy_now()` are removed too, so no alternate grant-to-dispatch-
+ready path survives. Hanna
+delegated the performance architecture call.
+
+D029's routed top made the choice evidence-driven: all top-20 setup paths are
+the same 31.517 ns family, running from `rob_head` through oldest-ready select,
+the selected destination tag, and a final wake compare into an IQ ready bit.
+Registering complete grants would make a stronger cut but add scheduler
+latency and change IPC; splitting scheduling metadata from the 162-bit payload
+is broader FPGA storage work and does not directly remove this feedback cone.
+Registering only the wake events cuts the measured final roughly 5 ns while
+keeping a producer selected in cycle N able to release its dependent in cycle
+N+1, exactly as D029 does.
+
+The permanent proof is predeclared before RTL: a Verilator-only D029 readiness
+shadow must equal D030 effective readiness for both sources of every live entry
+on every cycle; D028's legacy selection oracle stays active; the independent
+300k-cycle IQ public-interface model continues to compare every selected
+162-bit payload; directed cases cover dispatch wake, replay, both flush forms,
+reset, and stale captured-tag reuse; and full retirement lockstep remains the
+system oracle. Production acceptance additionally requires cycle-exact
+`hello.c` and CoreMark, no line-coverage regression from 99.3%, <=1% fitted-LE
+growth, Fmax >=34.4 MHz, disappearance of same-cycle grant-to-ready paths from
+the top 100, all timing classes positive, and zero unconstrained paths. The
+25 MHz board clock is unchanged unless a real fit supports a faster PLL with
+at least +3 ns slow-85C setup margin. Full design and gate record:
+**[IQ_WAKEUP_RETIME.md](IQ_WAKEUP_RETIME.md)**.
+
 ## D029 — 2026-07-14 — Remove proven-dead WB2 EX bypass; promote the OoO board clock from 16.67 MHz to timing-clean 25 MHz
 
 **Decision:** remove only the memory/load-result (WB2) arm from the generic EX

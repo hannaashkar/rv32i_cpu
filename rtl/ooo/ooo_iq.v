@@ -9,8 +9,8 @@
 // Scheduling contracts (docs/OOO.md):
 //   * ALU/branch/store grants broadcast their dest tag AT SELECT — a
 //     dependent can be selected the very next cycle (zero-bubble chains
-//     via the EX bypass network). Loads broadcast at WRITEBACK instead
-//     (external wkl bus) because a load may replay.
+//     via the EX bypass network). Loads broadcast after successful EX
+//     completion instead (external wkl bus) because a load may replay.
 //   * Entries deallocate at select, except loads which set `issued` and
 //     deallocate at WB-success (ldone) or re-arm on replay (rep).
 //   * A mem op is eligible only when its dispatch-time wait mask is 0
@@ -20,6 +20,9 @@
 //     cycle with the SQ's current unknown mask — bits only ever clear,
 //     and a reused SQ slot can never re-set a bit (a store reusing a
 //     slot is younger than this waiter by construction).
+//   * D030 registers the three wake events for one cycle. Eligibility uses
+//     stored-ready OR a captured-tag match, so the visible grant schedule is
+//     cycle-exact while the grant-to-ready-flop feedback timing path is cut.
 //   * Age = 6-bit ROB-tag distance from the ROB head tag.
 // ============================================================================
 `include "ooo_uop.vh"
@@ -51,7 +54,7 @@ module ooo_iq (
     // the simulation invariant check at the bottom; unused in synthesis
     input  wire [7:0]        sq_unknown_raw,
 
-    // load writeback tag broadcast (external wakeup)
+    // successful load-completion tag broadcast (external wakeup)
     input  wire              wkl_en,
     input  wire [5:0]        wkl_tag,
 
@@ -89,18 +92,40 @@ module ooo_iq (
     reg  [7:0]       mask   [0:IQD-1];
     reg  [`UOPW-1:0] u      [0:IQD-1];
 
+    // D030 wake-retiming tokens. A producer selected before edge E is
+    // captured here at E; its dependants see the token throughout the cycle
+    // after E, exactly when the old design's directly-written ready bit was
+    // visible. Tags are reset too for clean X/reset simulation, although a
+    // tag is meaningful only while its valid bit is set.
+    reg        wk0_q_v, wk1_q_v, wkl_q_v;
+    reg [5:0]  wk0_q_tag, wk1_q_tag, wkl_q_tag;
+
+    function wakes_q;
+        input [5:0] tag;
+        begin
+            wakes_q = (wk0_q_v && wk0_q_tag == tag)
+                    || (wk1_q_v && wk1_q_tag == tag)
+                    || (wkl_q_v && wkl_q_tag == tag);
+        end
+    endfunction
+
     integer i;
 
     // ------------------------------------------------------------------
     // eligibility
     // ------------------------------------------------------------------
     wire [IQD-1:0] elig_br, elig_alu, elig_mem;
+    wire [IQD-1:0] wake_q_r1, wake_q_r2;
     wire [5:0]     relage [0:IQD-1];
 
     genvar g;
     generate
         for (g = 0; g < IQD; g = g + 1) begin : ELIG
-            wire ready = v[g] && !issued[g] && r1[g] && r2[g];
+            assign wake_q_r1[g] = wakes_q(u[g][`U_PS1]);
+            assign wake_q_r2[g] = wakes_q(u[g][`U_PS2]);
+            wire ready = v[g] && !issued[g]
+                         && (r1[g] || wake_q_r1[g])
+                         && (r2[g] || wake_q_r2[g]);
             wire is_ctrl = u[g][`U_ISBR] | u[g][`U_ISJALR];
             wire is_mem  = u[g][`U_ISLOAD] | u[g][`U_ISSTORE];
             // A mem op issues only once its dispatch-time wait mask has
@@ -268,20 +293,22 @@ module ooo_iq (
     wire [4:0] p_mem = pick(elig_mem);
 
     // ------------------------------------------------------------------
-    // select-time wakeup tags (internal: port0/port1 grants; stores on
-    // port2 have wr=0 so they never broadcast; loads use the WB bus)
+    // Current wakeup tags. D030 uses these only as the D inputs of the
+    // one-cycle tokens above (plus the simulation-only legacy oracle below),
+    // removing the same-cycle grant-to-ready-state feedback path. Stores on
+    // port2 have wr=0; loads use the successful-completion wkl bus.
     // ------------------------------------------------------------------
     wire        wk0_en  = gr0_v && u[gr0_i][`U_WR];
     wire [5:0]  wk0_tag = u[gr0_i][`U_PD];
     wire        wk1_en  = p_alu1[4] && u[p_alu1[3:0]][`U_WR];
     wire [5:0]  wk1_tag = u[p_alu1[3:0]][`U_PD];
 
-    function wakes;
+    function wakes_now;
         input [5:0] tag;
         begin
-            wakes = (wk0_en && wk0_tag == tag)
-                 || (wk1_en && wk1_tag == tag)
-                 || (wkl_en && wkl_tag == tag);
+            wakes_now = (wk0_en && wk0_tag == tag)
+                      || (wk1_en && wk1_tag == tag)
+                      || (wkl_en && wkl_tag == tag);
         end
     endfunction
 
@@ -319,17 +346,28 @@ module ooo_iq (
     // ------------------------------------------------------------------
     always @(posedge clk or posedge reset) begin
         if (reset) begin
+            wk0_q_v <= 1'b0; wk0_q_tag <= 6'b0;
+            wk1_q_v <= 1'b0; wk1_q_tag <= 6'b0;
+            wkl_q_v <= 1'b0; wkl_q_tag <= 6'b0;
             for (i = 0; i < IQD; i = i + 1) begin
                 v[i] <= 1'b0; issued[i] <= 1'b0;
                 r1[i] <= 1'b0; r2[i] <= 1'b0;
                 mask[i] <= 8'b0; u[i] <= {`UOPW{1'b0}};
             end
         end else begin
-            // wakeups + mask decay on resident entries
+            // Capture CURRENT wake events. The resident updates below read
+            // the PREVIOUS tokens under nonblocking-assignment semantics.
+            // Capture is deliberately not flush-gated: an older branch-flush
+            // survivor may legally depend on a producer selected that cycle.
+            wk0_q_v <= wk0_en; wk0_q_tag <= wk0_tag;
+            wk1_q_v <= wk1_en; wk1_q_tag <= wk1_tag;
+            wkl_q_v <= wkl_en; wkl_q_tag <= wkl_tag;
+
+            // Persist prior-cycle token matches + decay masks on residents.
             for (i = 0; i < IQD; i = i + 1) begin
                 if (v[i]) begin
-                    if (wakes(u[i][`U_PS1])) r1[i] <= 1'b1;
-                    if (wakes(u[i][`U_PS2])) r2[i] <= 1'b1;
+                    if (wake_q_r1[i]) r1[i] <= 1'b1;
+                    if (wake_q_r2[i]) r2[i] <= 1'b1;
                     mask[i] <= mask[i] & sq_unknown;
                 end
             end
@@ -359,16 +397,20 @@ module ooo_iq (
                 v[free0]      <= 1'b1;
                 issued[free0] <= 1'b0;
                 u[free0]      <= disp0_uop;
-                r1[free0]     <= disp0_r1 || wakes(disp0_uop[`U_PS1]);
-                r2[free0]     <= disp0_r2 || wakes(disp0_uop[`U_PS2]);
+                // Never store a current or old token match here. A legal
+                // same-edge wake is the newly captured token in this entry's
+                // first resident cycle. ORing an old token would let a killed
+                // producer poison a reused physical tag after recovery.
+                r1[free0]     <= disp0_r1;
+                r2[free0]     <= disp0_r2;
                 mask[free0]   <= disp0_mask;
             end
             if (disp1_en && f1v) begin
                 v[free1]      <= 1'b1;
                 issued[free1] <= 1'b0;
                 u[free1]      <= disp1_uop;
-                r1[free1]     <= disp1_r1 || wakes(disp1_uop[`U_PS1]);
-                r2[free1]     <= disp1_r2 || wakes(disp1_uop[`U_PS2]);
+                r1[free1]     <= disp1_r1;
+                r2[free1]     <= disp1_r2;
                 mask[free1]   <= disp1_mask;
             end
 
@@ -391,6 +433,114 @@ module ooo_iq (
     end
 
 `ifdef VERILATOR
+    // D030 INV-I2: keep the D029 direct-wakeup readiness state live in
+    // simulation. For every resident source it must equal D030's stored
+    // readiness OR previous-cycle token bypass. This induction proves that
+    // eligibility and public grants remain cycle-for-cycle identical.
+    reg d030_old_r1 [0:IQD-1];
+    reg d030_old_r2 [0:IQD-1];
+    reg       d030_exp_wk0_v, d030_exp_wk1_v, d030_exp_wkl_v;
+    reg [5:0] d030_exp_wk0_tag, d030_exp_wk1_tag, d030_exp_wkl_tag;
+    // These count active CYCLES, not individual matches: multiple loop/slot
+    // nonblocking increments in one edge intentionally collapse to one.
+    reg [63:0] d030_q_apply_cycle_count;
+    reg [63:0] d030_dispatch_wake_cycle_count;
+    reg [2:0]  d030_source_seen;
+    reg [1:0]  d030_operand_seen;
+    integer d030_i;
+    integer d030_j;
+
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            d030_exp_wk0_v <= 1'b0; d030_exp_wk0_tag <= 6'b0;
+            d030_exp_wk1_v <= 1'b0; d030_exp_wk1_tag <= 6'b0;
+            d030_exp_wkl_v <= 1'b0; d030_exp_wkl_tag <= 6'b0;
+            d030_q_apply_cycle_count <= 64'b0;
+            d030_dispatch_wake_cycle_count <= 64'b0;
+            d030_source_seen <= 3'b0;
+            d030_operand_seen <= 2'b0;
+            for (d030_i = 0; d030_i < IQD; d030_i = d030_i + 1) begin
+                d030_old_r1[d030_i] <= 1'b0;
+                d030_old_r2[d030_i] <= 1'b0;
+            end
+        end else begin
+            // Independent expected-token pipeline. Comparing it with the
+            // synthesis tokens catches a missing/flush-gated capture.
+            d030_exp_wk0_v <= wk0_en; d030_exp_wk0_tag <= wk0_tag;
+            d030_exp_wk1_v <= wk1_en; d030_exp_wk1_tag <= wk1_tag;
+            d030_exp_wkl_v <= wkl_en; d030_exp_wkl_tag <= wkl_tag;
+            d030_source_seen <= d030_source_seen
+                                | {wkl_q_v, wk1_q_v, wk0_q_v};
+
+            // D029's old state transition: resident and same-edge dispatch
+            // both consumed the CURRENT wake buses directly.
+            for (d030_i = 0; d030_i < IQD; d030_i = d030_i + 1) begin
+                if (v[d030_i]) begin
+                    if (wakes_now(u[d030_i][`U_PS1]))
+                        d030_old_r1[d030_i] <= 1'b1;
+                    if (wakes_now(u[d030_i][`U_PS2]))
+                        d030_old_r2[d030_i] <= 1'b1;
+                    if ((!r1[d030_i] && wake_q_r1[d030_i])
+                        || (!r2[d030_i] && wake_q_r2[d030_i]))
+                        d030_q_apply_cycle_count
+                            <= d030_q_apply_cycle_count + 64'd1;
+                    if (!r1[d030_i] && wake_q_r1[d030_i])
+                        d030_operand_seen[0] <= 1'b1;
+                    if (!r2[d030_i] && wake_q_r2[d030_i])
+                        d030_operand_seen[1] <= 1'b1;
+                end
+            end
+            if (disp0_en && f0v) begin
+                d030_old_r1[free0] <= disp0_r1
+                                      || wakes_now(disp0_uop[`U_PS1]);
+                d030_old_r2[free0] <= disp0_r2
+                                      || wakes_now(disp0_uop[`U_PS2]);
+                if ((!disp0_r1 && wakes_now(disp0_uop[`U_PS1]))
+                    || (!disp0_r2 && wakes_now(disp0_uop[`U_PS2])))
+                    d030_dispatch_wake_cycle_count
+                        <= d030_dispatch_wake_cycle_count + 64'd1;
+            end
+            if (disp1_en && f1v) begin
+                d030_old_r1[free1] <= disp1_r1
+                                      || wakes_now(disp1_uop[`U_PS1]);
+                d030_old_r2[free1] <= disp1_r2
+                                      || wakes_now(disp1_uop[`U_PS2]);
+                if ((!disp1_r1 && wakes_now(disp1_uop[`U_PS1]))
+                    || (!disp1_r2 && wakes_now(disp1_uop[`U_PS2])))
+                    d030_dispatch_wake_cycle_count
+                        <= d030_dispatch_wake_cycle_count + 64'd1;
+            end
+        end
+    end
+
+    always @(posedge clk) if (!reset) begin
+        if (wk0_q_v !== d030_exp_wk0_v
+            || (wk0_q_v && wk0_q_tag !== d030_exp_wk0_tag)
+            || wk1_q_v !== d030_exp_wk1_v
+            || (wk1_q_v && wk1_q_tag !== d030_exp_wk1_tag)
+            || wkl_q_v !== d030_exp_wkl_v
+            || (wkl_q_v && wkl_q_tag !== d030_exp_wkl_tag))
+            $fatal(1, "ooo_iq INV-I2: captured wake != previous current wake");
+        for (d030_j = 0; d030_j < IQD; d030_j = d030_j + 1) begin
+            if (v[d030_j]
+                && (d030_old_r1[d030_j]
+                    !== (r1[d030_j] || wake_q_r1[d030_j])))
+                $fatal(1, "ooo_iq INV-I2: source1 readiness mismatch entry=%0d",
+                       d030_j);
+            if (v[d030_j]
+                && (d030_old_r2[d030_j]
+                    !== (r2[d030_j] || wake_q_r2[d030_j])))
+                $fatal(1, "ooo_iq INV-I2: source2 readiness mismatch entry=%0d",
+                       d030_j);
+        end
+    end
+
+    final begin
+        $display("[D030 INV-I2] q_apply_cycles=%0d dispatch_wake_cycles=%0d source_seen=%b operand_seen=%b",
+                 d030_q_apply_cycle_count, d030_dispatch_wake_cycle_count,
+                 d030_source_seen, d030_operand_seen);
+    end
+
     // D028 INV-I1: cycle-exact oracle for the top-two tournament.  Retain the
     // former clear-and-repick topology in simulation only and compare both
     // raw winners plus the architecturally consumed port-1 winner every edge.

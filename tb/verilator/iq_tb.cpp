@@ -7,7 +7,9 @@
 // select-time wakeup, monotonically-decaying store masks, load replay/done,
 // dual dispatch, and both recovery paths.  Every valid selected 162-bit uop
 // is compared word-for-word.  Directed cases are followed by 300,000 legal,
-// deterministic random cycles with mandatory functional coverage bins.
+// deterministic random cycles with mandatory functional coverage bins. D030
+// deliberately leaves this legacy behavioral model unchanged: if wake-event
+// retiming moves any public grant by a cycle, the comparison fails.
 //
 // Current D028 increment: OUT_LAT=0 (combinational public grants).  The model's
 // edge ordering is intentionally explicit so a later registered-grant arm can
@@ -79,6 +81,15 @@ struct Coverage {
     bool wk1 = false;
     bool wake_both_operands = false;
     bool dispatch_wake = false;
+    bool wake_q_apply[3][2]{}; // {port0,port1,load} x {source1,source2}
+    bool wake_q_all3_same_edge = false;
+    bool wake_q_direct_select = false;
+    bool wake_q_persist = false;
+    bool branch_flush_survivor_q = false;
+    bool branch_flush_active_q_persist = false;
+    bool stale_q_blocked_full_flush = false;
+    bool stale_q_blocked_branch_flush = false;
+    bool stale_q_blocked_reset = false;
     bool mask_bit[8]{};
     bool mask_multi = false;
     bool mask_block = false;
@@ -108,6 +119,12 @@ int failures = 0;
 uint8_t env_head = 0;
 uint8_t env_sq_unknown = 0;
 uint8_t env_sq_unknown_raw = 0;
+
+// Coverage-only one-cycle token monitor. The architectural golden model
+// intentionally stays at the D029 contract; this monitor attributes a D030
+// source/operand bin only in the following cycle, after the matching target
+// is known to have survived the capture edge.
+int pending_q_target[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
 
 uint32_t rng_state = 0xD0281A5Eu;
 
@@ -404,6 +421,20 @@ void model_next_edge(const Decision& d) {
     const std::array<Entry, IQD> before = model;
     std::array<Entry, IQD> next = before;
     const std::vector<int> free = free_indices();
+    uint16_t capture_match[3][2]{};
+
+    for (int s = 0; s < 3; ++s)
+        for (int op = 0; op < 2; ++op) {
+            const int idx = pending_q_target[s][op];
+            if (idx >= 0 && before[idx].valid)
+                cov.wake_q_apply[s][op] = true;
+            pending_q_target[s][op] = -1;
+        }
+
+    const bool wk0v = d.idx[0] >= 0 && writes(before[d.idx[0]].u);
+    const bool wk1v = d.idx[1] >= 0 && writes(before[d.idx[1]].u);
+    if (wk0v && wk1v && top->wkl_en)
+        cov.wake_q_all3_same_edge = true;
 
     // Resident wakeup and wait-mask decay use pre-edge state.
     for (int i = 0; i < IQD; ++i) {
@@ -412,12 +443,20 @@ void model_next_edge(const Decision& d) {
         const bool w1p1 = !before[i].r1 && wake_from_port(d, 1, ps1(before[i].u));
         const bool w2p0 = !before[i].r2 && wake_from_port(d, 0, ps2(before[i].u));
         const bool w2p1 = !before[i].r2 && wake_from_port(d, 1, ps2(before[i].u));
+        const bool w1pl = !before[i].r1 && top->wkl_en
+                          && ps1(before[i].u) == (top->wkl_tag & 63u);
+        const bool w2pl = !before[i].r2 && top->wkl_en
+                          && ps2(before[i].u) == (top->wkl_tag & 63u);
         if (w1p0 || w2p0) cov.wk0 = true;
         if (w1p1 || w2p1) cov.wk1 = true;
         if ((w1p0 || w1p1) && (w2p0 || w2p1)) cov.wake_both_operands = true;
-        if (top->wkl_en && ((!before[i].r1 && ps1(before[i].u) == (top->wkl_tag & 63u))
-                            || (!before[i].r2 && ps2(before[i].u) == (top->wkl_tag & 63u))))
-            cov.wkl = true;
+        if (w1pl || w2pl) cov.wkl = true;
+        if (w1p0) capture_match[0][0] |= static_cast<uint16_t>(1u << i);
+        if (w2p0) capture_match[0][1] |= static_cast<uint16_t>(1u << i);
+        if (w1p1) capture_match[1][0] |= static_cast<uint16_t>(1u << i);
+        if (w2p1) capture_match[1][1] |= static_cast<uint16_t>(1u << i);
+        if (w1pl) capture_match[2][0] |= static_cast<uint16_t>(1u << i);
+        if (w2pl) capture_match[2][1] |= static_cast<uint16_t>(1u << i);
 
         if (wakes(d, ps1(before[i].u))) next[i].r1 = true;
         if (wakes(d, ps2(before[i].u))) next[i].r2 = true;
@@ -504,6 +543,15 @@ void model_next_edge(const Decision& d) {
         if (d.idx[0] != i && d.idx[1] != i && d.idx[2] != i) cov.load_held = true;
         else fail("model", "issued load selected twice", i, UINT64_MAX);
     }
+
+    // Arm next-cycle coverage only for an entry that remains resident after
+    // select/replay/dispatch/recovery priority has been applied.
+    for (int s = 0; s < 3; ++s)
+        for (int op = 0; op < 2; ++op)
+            for (int i = 0; i < IQD; ++i)
+                if (pending_q_target[s][op] < 0 && next[i].valid
+                    && (capture_match[s][op] & (1u << i)))
+                    pending_q_target[s][op] = i;
     model = next;
 }
 
@@ -571,6 +619,9 @@ void reset_dut(uint8_t head = 0, uint8_t sq = 0) {
     top->clk = 1; top->eval();
     top->clk = 0; top->eval();
     for (Entry& e : model) e = Entry{};
+    for (int s = 0; s < 3; ++s)
+        for (int op = 0; op < 2; ++op)
+            pending_q_target[s][op] = -1;
     top->reset = 0;
     top->eval();
 }
@@ -693,6 +744,48 @@ void directed_phase() {
     step("directed-dispatch-on-select");
     idle_step("directed-dispatched-dependent-select");
 
+    // D030: capture both internal grants and the successful-load wake in one
+    // edge, then consume every source/operand combination in the immediately
+    // following cycle. The unchanged D029 model proves there is no cycle slip.
+    reset_dut(0);
+    dispatch_pair(make_uop(Kind::Alu, 1, 55, 1, 40, true, cookie++), false, true, 0,
+                  make_uop(Kind::Csr, 2, 55, 1, 41, true, cookie++), false, true, 0,
+                  "directed-d030-all3-producers");
+    dispatch_one(make_uop(Kind::Load, 3, 40, 42, 43, true, cookie++),
+                 false, false, 0, "directed-d030-all3-load");
+    dispatch_pair(make_uop(Kind::Alu, 4, 41, 40, 44, true, cookie++), false, false, 0,
+                  make_uop(Kind::Ctrl, 5, 42, 41, 45, true, cookie++), false, false, 0,
+                  "directed-d030-all3-dependants");
+    idle_controls(); top->wkl_en = 1; top->wkl_tag = 55;
+    step("directed-d030-all3-arm-producers");
+    idle_controls(); top->wkl_en = 1; top->wkl_tag = 42;
+    step("directed-d030-all3-capture");
+    {
+        const int before_failures = failures;
+        idle_step("directed-d030-all3-direct-select");
+        if (failures == before_failures) cov.wake_q_direct_select = true;
+    }
+
+    // D030 persistence: q44 resolves only source1 while source2 is blocked.
+    // The q token then expires; a later q45 must still release the dependant,
+    // proving the source1 match was persisted into sticky resident state.
+    reset_dut(0);
+    dispatch_one(make_uop(Kind::Alu, 1, 54, 1, 44, true, cookie++),
+                 false, true, 0, "directed-d030-persist-producer");
+    dispatch_one(make_uop(Kind::Alu, 2, 44, 45, 46, true, cookie++),
+                 false, false, 0, "directed-d030-persist-dependant");
+    idle_controls(); top->wkl_en = 1; top->wkl_tag = 54;
+    step("directed-d030-persist-arm");
+    idle_step("directed-d030-persist-capture-q44");
+    idle_step("directed-d030-persist-q44-expires");
+    idle_controls(); top->wkl_en = 1; top->wkl_tag = 45;
+    step("directed-d030-persist-capture-q45");
+    {
+        const int before_failures = failures;
+        idle_step("directed-d030-persist-select");
+        if (failures == before_failures) cov.wake_q_persist = true;
+    }
+
     // Every SQ wait bit, multi-bit masks, and the raw-vs-bypassed clear edge.
     for (int b = 0; b < 8; ++b) {
         const uint8_t m = static_cast<uint8_t>(1u << b);
@@ -773,6 +866,102 @@ void directed_phase() {
     step("directed-select-alloc-full-flush");
     idle_step("directed-full-flush-empty");
 
+    // D030 full-flush stale-tag defence. Capture both internal destination
+    // tags plus wkl while the queue is emptied. Consumers dispatched during
+    // the following q-active cycle must not store those old matches.
+    reset_dut(0);
+    dispatch_pair(make_uop(Kind::Alu, 1, 1, 2, 40, true, cookie++), true, true, 0,
+                  make_uop(Kind::Csr, 2, 1, 2, 41, true, cookie++), true, true, 0,
+                  "directed-d030-full-stale-producers");
+    idle_controls(); top->wkl_en = 1; top->wkl_tag = 42;
+    top->flush_all = 1;
+    step("directed-d030-full-stale-capture-flush");
+    idle_controls();
+    set_dispatch(0, make_uop(Kind::Alu, 3, 40, 42, 43, true, cookie++),
+                 false, false, 0);
+    set_dispatch(1, make_uop(Kind::Csr, 4, 41, 1, 44, true, cookie++),
+                 false, true, 0);
+    step("directed-d030-full-stale-reuse-dispatch");
+    {
+        const int before_failures = failures;
+        idle_step("directed-d030-full-stale-must-block");
+        int waiters = 0;
+        for (const Entry& e : model)
+            if (e.valid && !e.issued && (!e.r1 || !e.r2)) ++waiters;
+        const bool blocked_and_resident = live_count() == 2 && waiters == 2;
+
+        // Positive retention tail: genuine later wakes must recover the exact
+        // two consumers. This prevents a false pass if stale-q handling
+        // accidentally dropped the dispatches instead of leaving them blocked.
+        idle_controls(); top->wkl_en = 1; top->wkl_tag = 41;
+        step("directed-d030-full-stale-real-wake-c1");
+        idle_step("directed-d030-full-stale-select-c1");
+        idle_controls(); top->wkl_en = 1; top->wkl_tag = 40;
+        step("directed-d030-full-stale-real-wake-c0-r1");
+        idle_controls(); top->wkl_en = 1; top->wkl_tag = 42;
+        step("directed-d030-full-stale-real-wake-c0-r2");
+        idle_step("directed-d030-full-stale-select-c0");
+        if (failures == before_failures && blocked_and_resident
+            && live_count() == 0)
+            cov.stale_q_blocked_full_flush = true;
+    }
+
+    // D030 branch recovery in one sequence: the old producer and dependant
+    // survive, the young producer dies, and both internal tags are captured
+    // on the flush edge. The survivor must consume pd46 immediately; a newly
+    // dispatched ps1=pd47 consumer must not inherit the killed producer tag.
+    reset_dut(0);
+    dispatch_pair(make_uop(Kind::Alu, 1, 55, 1, 46, true, cookie++), false, true, 0,
+                  make_uop(Kind::Csr, 4, 55, 1, 47, true, cookie++), false, true, 0,
+                  "directed-d030-branch-producers");
+    dispatch_one(make_uop(Kind::Alu, 2, 46, 1, 48, true, cookie++),
+                 false, true, 0, "directed-d030-branch-survivor");
+    idle_controls(); top->wkl_en = 1; top->wkl_tag = 55;
+    step("directed-d030-branch-arm-producers");
+    idle_controls(); top->flush_en = 1; top->flush_tag = 3;
+    step("directed-d030-branch-capture-flush");
+    {
+        const int before_failures = failures;
+        idle_controls();
+        set_dispatch(0, make_uop(Kind::Alu, 5, 47, 1, 49, true, cookie++),
+                     false, true, 0);
+        step("directed-d030-branch-survivor-select-and-reuse");
+        if (failures == before_failures) cov.branch_flush_survivor_q = true;
+    }
+    {
+        const int before_failures = failures;
+        idle_step("directed-d030-branch-stale-must-block");
+        int waiters = 0;
+        for (const Entry& e : model)
+            if (e.valid && !e.issued && (!e.r1 || !e.r2)) ++waiters;
+        const bool blocked_and_resident = live_count() == 1 && waiters == 1;
+        idle_controls(); top->wkl_en = 1; top->wkl_tag = 47;
+        step("directed-d030-branch-stale-real-wake");
+        idle_step("directed-d030-branch-stale-select");
+        if (failures == before_failures && blocked_and_resident
+            && live_count() == 0)
+            cov.stale_q_blocked_branch_flush = true;
+    }
+
+    // A token already active on the branch-flush edge must still persist into
+    // an older survivor. Source1 wakes first; source2 remains blocked until
+    // after q60 has expired, so the final select depends on that persistence.
+    reset_dut(0);
+    dispatch_one(make_uop(Kind::Alu, 2, 60, 61, 50, true, cookie++),
+                 false, false, 0, "directed-d030-branch-active-q-survivor");
+    idle_controls(); top->wkl_en = 1; top->wkl_tag = 60;
+    step("directed-d030-branch-active-q-arm");
+    idle_controls(); top->flush_en = 1; top->flush_tag = 3;
+    step("directed-d030-branch-active-q-flush-persist");
+    idle_controls(); top->wkl_en = 1; top->wkl_tag = 61;
+    step("directed-d030-branch-active-q-second-source");
+    {
+        const int before_failures = failures;
+        idle_step("directed-d030-branch-active-q-select");
+        if (failures == before_failures && live_count() == 0)
+            cov.branch_flush_active_q_persist = true;
+    }
+
     // Asynchronous reset while a combinational selection is live.
     reset_dut(0);
     dispatch_one(make_uop(Kind::Alu, 1, 1, 2, 40, true, cookie++),
@@ -781,6 +970,37 @@ void directed_phase() {
     if (golden_decision().idx[0] >= 0 && top->sel0_v) cov.reset_with_select = true;
     reset_dut(0);
     idle_step("directed-reset-empty");
+
+    // D030 asynchronous reset must clear all active wake-token valids.
+    reset_dut(0);
+    dispatch_pair(make_uop(Kind::Alu, 1, 1, 2, 50, true, cookie++), true, true, 0,
+                  make_uop(Kind::Csr, 2, 1, 2, 51, true, cookie++), true, true, 0,
+                  "directed-d030-reset-token-producers");
+    idle_controls(); top->wkl_en = 1; top->wkl_tag = 52;
+    step("directed-d030-reset-token-capture");
+    reset_dut(0);
+    dispatch_pair(make_uop(Kind::Alu, 3, 50, 52, 53, true, cookie++), false, false, 0,
+                  make_uop(Kind::Csr, 4, 51, 1, 54, true, cookie++), false, true, 0,
+                  "directed-d030-reset-token-reuse");
+    {
+        const int before_failures = failures;
+        idle_step("directed-d030-reset-token-must-block");
+        int waiters = 0;
+        for (const Entry& e : model)
+            if (e.valid && !e.issued && (!e.r1 || !e.r2)) ++waiters;
+        const bool blocked_and_resident = live_count() == 2 && waiters == 2;
+        idle_controls(); top->wkl_en = 1; top->wkl_tag = 51;
+        step("directed-d030-reset-token-real-wake-c1");
+        idle_step("directed-d030-reset-token-select-c1");
+        idle_controls(); top->wkl_en = 1; top->wkl_tag = 50;
+        step("directed-d030-reset-token-real-wake-c0-r1");
+        idle_controls(); top->wkl_en = 1; top->wkl_tag = 52;
+        step("directed-d030-reset-token-real-wake-c0-r2");
+        idle_step("directed-d030-reset-token-select-c0");
+        if (failures == before_failures && blocked_and_resident
+            && live_count() == 0)
+            cov.stale_q_blocked_reset = true;
+    }
 }
 
 bool model_has_tag(uint8_t t) {
@@ -973,7 +1193,23 @@ void check_required_coverage() {
     require(cov.wk0, "port0 select wake");
     require(cov.wk1, "port1 select wake");
     require(cov.wake_both_operands, "two-operand select wake");
-    require(cov.dispatch_wake, "dispatch captures select wake");
+    require(cov.dispatch_wake, "dispatch on wake-capture edge");
+    for (int s = 0; s < 3; ++s)
+        for (int op = 0; op < 2; ++op) {
+            char name[64];
+            std::snprintf(name, sizeof(name), "captured-wake-source%d-operand%d",
+                          s, op + 1);
+            require(cov.wake_q_apply[s][op], name);
+        }
+    require(cov.wake_q_all3_same_edge, "all three wake tokens captured together");
+    require(cov.wake_q_direct_select, "captured wake selects next cycle");
+    require(cov.wake_q_persist, "captured wake persists into stored readiness");
+    require(cov.branch_flush_survivor_q, "branch survivor consumes captured wake");
+    require(cov.branch_flush_active_q_persist,
+            "active captured wake persists through branch flush");
+    require(cov.stale_q_blocked_full_flush, "full-flush stale wake blocked");
+    require(cov.stale_q_blocked_branch_flush, "branch-flush stale wake blocked");
+    require(cov.stale_q_blocked_reset, "reset stale wake blocked");
     for (int b = 0; b < 8; ++b) {
         char name[48]; std::snprintf(name, sizeof(name), "wait-mask-bit-%d", b);
         require(cov.mask_bit[b], name);
@@ -996,7 +1232,7 @@ void check_required_coverage() {
     if (failures == before) {
         std::printf("iq-tb: mandatory coverage bins PASS "
                     "(occ 0..16, dispatch 0/1/2, winners 3x16, age/wakeup/"
-                    "mask/replay/flush/reset)\n");
+                    "D030-retime/mask/replay/flush/reset)\n");
     }
 }
 
