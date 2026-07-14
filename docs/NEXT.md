@@ -44,33 +44,68 @@ delegated → Option A). **Board top 43,609 → 34,714 LEs (88% → 70%,
 0 defects). Record: DECISIONS.md D025. **Merged to `main` and pushed as
 `ab79b50`** (the estimate was ~9–10k LEs; delivered −8,895, on the nose).
 
-## 2. 2-stage pipelined issue-queue scheduler  — [Hanna, big µarch]
+## 2. LQ violation-path timing redesign  — [Hanna, µarch decision]  ← current limiter
 
-The real fix for OoO **wall-clock** speed. Today perf = IPC × Fmax, and
-OoO's Fmax (~23 MHz on the board) is the limiter — it needs ~42 MHz to
-beat the in-order core's 50 MHz despite winning on IPC. The fabric now has
-room (88%) to pipeline the select+wakeup. D019 pipelined the *select*
-tree; this is the deferred *2-stage* select→wakeup split. Changes IPC —
-must A/B CoreMark/hello and lockstep-verify. Biggest project on the list.
+D025 STA changed the priority. The current Fmax report is **23.51 MHz**, and
+all top-20 setup paths are the same ~41.9 ns / 36-level chain:
 
-## 3. JALR target adder  — [Hanna, small µarch]
+`dmem M9K → load WB bypass → dependent-store AGU → LQ oldest-match select → rob_poison`
 
-The current critical path is `dmem-load → rob_poison` (the D020 LQ CAM),
-and JALR's target compare rides the full ALU/shifter cone. A dedicated
-rs1+imm target adder cuts ~10 ns off that cone. Small RTL change,
-lockstep-verifiable; do it when chasing the next clock bump (PLL /3 → a
-faster fractional ratio, 20–25 MHz).
+Neither the issue scheduler nor JALR appears in the top 20, so changing either
+first is not evidence-based. Choose one option before RTL:
 
-## 4. IQ payload split  — [Hanna, medium µarch]
+1. **Parallel match + balanced age tree (recommended first).** Replace the
+   serial `m_found/m_age` loop with a bit/cycle-exact balanced reduction, using
+   the successful D019 IQ-tree pattern. Lowest recovery risk; modest logic
+   rewrite; expected to shorten the current combinational chain without an IPC
+   change.
+2. **Register the store-fill/CAM request.** Breaks the AGU→CAM path most
+   decisively, but delayed poisoning must prove branch-squash, ROB-tag reuse,
+   same-cycle recovery, and precise exception ordering. Highest timing upside
+   and highest verification/architectural complexity.
+3. **Conservative FPGA profile.** Compile out speculative-load recovery for a
+   board SKU (setting `LOAD_POLICY=0` alone is insufficient because the LQ
+   hardware remains). Lowest implementation risk and a useful PPA control, but
+   gives up roughly 2% CoreMark IPC and makes simulation/FPGA policies differ.
+
+After the chosen change: unit-test the selector if applicable, run both full
+lockstep gates plus policy A/B benchmarks, rerun fit/STA, and only then promote
+the next measured limiter.
+
+## 3. 2-stage pipelined issue-queue scheduler  — [Hanna, big µarch, deferred by STA]
+
+This remains the likely deeper wall-clock project: the OoO core needs about
+41.4 MHz to tie the in-order core's `0.849 IPC × 50 MHz`. D019 balanced the
+select tree; a true select→wakeup split changes latency/IPC and needs CoreMark,
+hello, and lockstep A/B evidence. Do it after the LQ path is removed and only
+if post-change STA returns to the scheduler.
+
+## 4. JALR target adder  — [Hanna, small µarch, deferred by STA]
+
+A dedicated rs1+imm target adder remains a clean small optimization, but JALR
+is absent from the D025 top-20 paths. Keep it queued until post-LQ STA shows the
+ALU/shifter/JALR cone again.
+
+## 5. IQ payload split  — [Hanna, medium µarch]
 
 Split the 162-bit IQ uop into a scheduling-bits array + a payload RAM
 (~111 of the 162 bits are never read by scheduling logic). ~3k LEs, and it
-de-risks task #2 (less state to pipeline). Evidence: audit §1.
+de-risks task #3 (less state to pipeline). Evidence: audit §1.
 
 ---
 
-## 5. Small infra / cleanups  — [Claude, do anytime]
+## 6. Small infra / cleanups  — [Claude, do anytime]
 
+- **Portable setup/tool discovery** — the wrapper is excellent on Hanna's
+  machine, but Makefile defaults still embed local xPack/Python/Quartus paths.
+  Add `docs/SETUP.md`, PATH-first discovery, explicit override examples, and a
+  clean-clone smoke check without weakening the known-good Windows flow.
+- **Root license — [Hanna legal choice].** The public repository has no root
+  license. Pick an intentional hardware/software license (and confirm how the
+  separately licensed vendored CoreMark source is described) before adding it;
+  Codex should not silently choose ownership terms.
+- **CI coverage for the new lanes** — add bounded system/NPU/X-state jobs after
+  this verification branch lands; preserve seeded artifacts on failure.
 - **NPU on-board error patterns** — mlp_board.c parks with dark displays
   on NPU-ID / self-test failure (indistinguishable from a dead board);
   drive an "E-1"/"E-2" + fail-count pattern on HEX first. (Hanna-gated:

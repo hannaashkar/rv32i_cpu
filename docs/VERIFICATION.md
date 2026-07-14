@@ -7,8 +7,9 @@ final CHECK.
 
 ## Lockstep co-simulation (the backbone)
 
-`tb/verilator/iss.h` is an independent ~300-line RV32I+Zicsr instruction
--set simulator. On every retired instruction (`validW`), the harness
+`tb/verilator/iss.h` is an independently implemented ~300-line model of the
+project's RV32I compute/load-store/control-flow + Zicsr and counter behavior. On
+every retired instruction (`validW`), the harness
 steps the ISS and compares:
 
 - the retired **PC**,
@@ -31,7 +32,7 @@ modeled exactly; a quirk is architecture once documented.
 | Layer | Command | What it adds |
 |---|---|---|
 | Directed suites (`sw/tests/*.S`, `sw/ctests/*.c`) | `make regress` | Targeted corner cases: hazards found as real bugs (B004/B007/B008 regressions), BTB-stale returns, sub-word lanes, CSR semantics, exact instret deltas, the C runtime |
-| Official ISA tests (riscv-tests rv32ui, vendored) | `make regress-isa` | 40/40 third-party acceptance tests — the industry's definition of "implements RV32I" |
+| Third-party integer tests (`riscv-tests` rv32ui, vendored) | `make regress-isa` | 40/40 integer-instruction acceptance tests; this is not a privileged/trap compliance claim |
 | Constrained-random (`scripts/gen_random_test.py`) | `make regress-rand` | 25 seeds × 3000 instructions of weighted-random mix incl. misaligned accesses and dense hazards; forward-only control flow guarantees termination; reproducible by seed |
 | System/decode-tail random (`--sys`) | `make regress-rand-sys` | 25 seeds × 3000 instructions with low-weight FENCE, ECALL, EBREAK, and reserved-opcode injection; proves the documented no-trap NOP contract at retirement without perturbing the established default seeds |
 | NPU/MMIO ordering random (`--npu`) | `make regress-rand-npu` | 25 seeds × 3000 instructions with staged A/B traffic, back-to-back GO, busy-time address/data dependencies, readbacks, and unmapped accesses; targets B010/B011 while the ISS mirrors every NPU access |
@@ -92,6 +93,7 @@ models and benchmark cycle counts are untouched.
 
 ## Bug log
 
-Every real bug found is recorded in [BUGLOG.md](BUGLOG.md) with symptom,
-root cause, how it was caught, and the fix (B001–B008 so far; two of
-them — B007, B008 — were found by this infrastructure).
+Every real RTL/SoC integration bug found is recorded in
+[BUGLOG.md](BUGLOG.md) with symptom, root cause, how it was caught, and the
+fix (**B001–B014**, 14 unique bugs). Several exist as permanent directed,
+random, assertion, or recovery-stress regressions rather than anecdotes.

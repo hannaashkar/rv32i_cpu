@@ -89,6 +89,15 @@ and synthesis.
   all-paths floor that counts SDC-excluded async paths (same figure as
   D022's board top); the constrained slack is the sign-off number.
 
+**Current-tree reportable performance confirmation (2026-07-14):** the exact
+same 720-iteration CoreMark image ran on both models. In-order measured
+58.828385 iterations/s (**1.176568 CoreMark/MHz**, 612,038,902 cycles, IPC
+0.849); D025 OoO measured 71.127993 iterations/s (**1.422560 CoreMark/MHz**,
+506,194,158 cycles, IPC 1.026): **+20.91% CoreMark/MHz**. Both runs exceeded
+10 benchmark seconds, printed `Correct operation validated`, matched the 2K
+CRCs, and checked ~519.45M retired instructions against the ISS with zero
+divergence. `make coremark-compare` preserves this same-image A/B protocol.
+
 **Interview story:** the read-address fold Hanna has now defended four times
 (dmem D016, imem D022, gshare D024, PRF D025) + a textbook FPGA multi-ported
 block-RAM construction (LVT), verified bit-exact against an independent ISS.

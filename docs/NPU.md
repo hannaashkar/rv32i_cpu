@@ -138,6 +138,25 @@ soft int8 path and the NPU path, requires bit-exact logit agreement plus
 agreement with the offline integer reference, and prints both cycle
 counts (rdcycle) — that ratio is the reported speedup.
 
+## Measured end-to-end result
+
+Current-tree D025 runs (32 images, 32/32 classifications correct, NPU logits
+bit-exact with the software path) measure:
+
+| Core | Software cycles | NPU cycles | Cycle speedup |
+|---|---:|---:|---:|
+| 5-stage in-order | 96,367,418 | 1,120,610 | **85.99×** |
+| 2-wide OoO | 58,535,712 | 627,343 | **93.30×** |
+
+The displayed ratios match the on-core program's fixed-point x100 output
+(truncated to two decimal places).
+
+The offline integer network scores **97.13%** over the full 10,000-image MNIST
+test set. The speedups above are cycle-accurate simulation measurements from
+the cores' `cycle` CSRs, not physical-board latency measurements. Reproduce
+them with `make npu-mlp` and `make npu-mlp-ooo` (or the `scripts\make.cmd`
+wrapper in PowerShell).
+
 ## Verification
 
 1. **Unit TB** (`tb/verilator/npu_tb.cpp`, `make npu-tb`): drives the raw
@@ -163,9 +182,10 @@ counts (rdcycle) — that ratio is the reported speedup.
 
 ## FPGA status
 
-Synthesized into both cores (16 embedded 9×9 multipliers + ~900 FFs);
-`quartus_map` gate stays 0-errors. The FPGA top remains `cpu_pipeline`
-until the B005 PLL/timing stage. Note the real-board MLP demo needs the
-B006 BRAM stage first (4 KB imem / 1 KB dmem can't hold 26 KB of
-weights) — this stage's measured speedup numbers come from simulation
-with `SIM_BIG_MEM`, same as the CoreMark baseline.
+The array maps to 16 embedded 9×9 multipliers and is integrated with both
+cores. An OoO configuration containing the NPU, M9K-resident program memory,
+PLL, and timing constraints has run on the DE10-Lite at 16.67 MHz and booted
+standalone from internal flash; that hardware proof used the LED walker, not
+NPU inference. The current D025 MNIST top—including M9K-initialized weights—
+fits at 34,714 / 49,760 LEs (70%) and closes timing with +17.47 ns setup slack.
+Its `.sof` is built; the first physical MNIST flash/demo remains pending.

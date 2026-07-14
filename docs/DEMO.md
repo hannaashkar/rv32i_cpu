@@ -3,10 +3,12 @@
 How to flash and drive the two board demos. The flashing procedure and the
 LED walker are hardware-proven (2026-07-11); the MNIST demo is
 lockstep-verified in simulation on both cores — its first board flash is
-the acceptance step. **The MNIST bitstream now builds** — the gshare→M9K
-shrink (D024) freed the fabric, so the demo top fits at 88% LEs and
-closes timing at 16.67 MHz with +16.8 ns slack; `output_files/
-rv32i_cpu.sof` is built and ready to flash. (Before D024 it failed to
+the acceptance step. **The MNIST bitstream now builds** — D024 first made
+the design routable by moving the gshare PHT into M9Ks; D025 then moved the
+6R/3W PRF into 18 M9Ks. The current top fits at **34,714 / 49,760 LEs
+(70%)** and closes timing at 16.67 MHz with **+17.47 ns** setup slack;
+`output_files/rv32i_cpu.sof` was reassembled from the D025 fit on 2026-07-14
+and is ready to flash. (Before D024 it failed to
 route at 96% LEs — if you are on an older checkout and hit "Can't route",
 that is why.) If anything surprises you, the board state section at the
 bottom is the first thing to check.
@@ -64,11 +66,13 @@ it enters the interactive loop:
   correctly, so HEX2 and HEX0 always match — flip switches and watch the
   answer track the truth.
 
-What this exercises end-to-end on silicon: the banked M9K instruction ROM,
-the MIF-initialized 64 KB block-RAM data memory (weights present at
-power-up — there is no loader), the OoO core's IO-ordering interlocks
-against a busy NPU, the systolic array itself, and the new 7-segment MMIO
-path. The same binary's self-test phase runs in the Verilator regression
+Once flashed, this will exercise end-to-end on silicon: the banked M9K
+instruction ROM, the MIF-initialized 64 KB block-RAM data memory (weights
+present at power-up — there is no loader), the OoO core's IO-ordering
+interlocks against a busy NPU, the systolic array itself, and the new
+7-segment MMIO path. Until that acceptance step, these are simulation +
+fit/STA claims, not an on-board inference claim. The same binary's self-test
+phase runs in the Verilator regression
 (`make npu-mlp-board[-ooo]`), lockstep-compared against the golden model.
 
 ## The LED walker (D022 bring-up test)

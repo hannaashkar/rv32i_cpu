@@ -325,12 +325,14 @@ CM_SRCS := $(CM_DIR)/core_list_join.c $(CM_DIR)/core_main.c \
            $(CM_DIR)/core_util.c \
            $(CM_DIR)/rv32/core_portme.c $(CM_DIR)/rv32/ee_printf.c \
            $(CM_DIR)/rv32/cvt.c
-# 600 iterations ≈ 510M cycles ≈ 10.2 simulated seconds at 50 MHz — the
-# minimum CoreMark accepts as a reportable run (its 10-second rule counts
-# into total_errors!). Use CM_ITER=10 for a quick correctness check; the
-# CRC gate below is iteration-count independent.
+# 600 iterations ≈ 510M cycles ≈ 10.2 simulated seconds on the in-order
+# baseline. The faster current OoO core needs 720 iterations to clear
+# CoreMark's 10-second reporting rule; coremark-ooo sets that default below.
+# Use coremark-quick[-ooo] for a short CRC-only correctness check.
 CM_ITER ?= 600
 CM_OPT  ?= -O2
+CM_REQUIRE_REPORT ?= 1
+COREMARK_LOG ?= coremark.log
 CM_FLAGS = $(SW_CFLAGS) $(CM_OPT) -ffreestanding \
            -I$(CM_DIR) -I$(CM_DIR)/rv32 -Isw/common \
            -DITERATIONS=$(CM_ITER) \
@@ -350,18 +352,33 @@ $(CM_DIR)/coremark.elf: $(CM_SRCS) $(CM_DIR)/coremark.h \
 	$(RISCV_GCC) $(CM_FLAGS) -o $@ $(CRT0) $(LIBMIN) $(CM_SRCS) -lm -lgcc
 
 # Pass gate = the three benchmark CRCs against the official expected values
-# for the 2K performance profile (seeds 0/0/0x66) — these are independent
-# of iteration count, unlike "Correct operation validated" which also
-# requires the >=10s rule to be satisfied (CM_ITER >= 600 here).
+# for the 2K performance profile (seeds 0/0/0x66). Full targets additionally
+# require CoreMark's own "Correct operation validated" line, which includes
+# the >=10-second rule; quick targets deliberately request CRC-only mode.
 coremark: $(RUN_BIN) $(CM_DIR)/coremark.text.hex $(CM_DIR)/coremark.data.hex
 	set -o pipefail; ./$(RUN_BIN) +imem=$(CM_DIR)/coremark.text.hex \
 	    +dmem=$(CM_DIR)/coremark.data.hex \
-	    +max_cycles=900000000 | tee coremark.log
-	@grep -Eq 'crclist.*0xe714'  coremark.log && \
-	 grep -Eq 'crcmatrix.*0x1fd7' coremark.log && \
-	 grep -Eq 'crcstate.*0x8e3a'  coremark.log \
+	    +max_cycles=900000000 | tee $(COREMARK_LOG)
+	@grep -Eq 'crclist.*0xe714'  $(COREMARK_LOG) && \
+	 grep -Eq 'crcmatrix.*0x1fd7' $(COREMARK_LOG) && \
+	 grep -Eq 'crcstate.*0x8e3a'  $(COREMARK_LOG) \
 	    && echo "coremark: CRCs match official 2K performance-run values" \
 	    || { echo "coremark: CRC MISMATCH — computation is wrong"; exit 1; }
+	@if [ "$(CM_REQUIRE_REPORT)" = "1" ]; then \
+	    grep -q 'Correct operation validated' $(COREMARK_LOG) \
+	      && echo "coremark: reportable run (CoreMark >=10-second rule met)" \
+	      || { echo "coremark: NOT REPORTABLE — raise CM_ITER or use coremark-quick"; exit 1; }; \
+	fi
+
+coremark-quick:
+	$(MAKE) coremark CM_ITER=10 CM_REQUIRE_REPORT=0
+
+# Apples-to-apples current-tree comparison: both models consume the exact same
+# 720-iteration ELF/HEX, and separate logs preserve both reportable results.
+coremark-compare:
+	$(MAKE) coremark RUN_BIN=$(SIM_BIN) CM_ITER=720 COREMARK_LOG=coremark-inorder.log
+	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO) CM_ITER=720 COREMARK_LOG=coremark-ooo.log
+	$(PYTHON) scripts/coremark_compare.py coremark-inorder.log coremark-ooo.log
 
 # --- quantized MNIST MLP on the NPU (docs/NPU.md, D014/D015) ------------------
 # weights.h is generated offline by scripts/train_mlp.py (numpy, seeded).
@@ -620,7 +637,7 @@ verify: regress regress-isa regress-rand regress-rand-sys regress-rand-npu regre
 # The suite targets are recipes, not files: without .PHONY a stray file
 # named e.g. "regress" would silently skip the entire suite (the -ooo
 # aliases were protected; the base targets were not — audit 2026-07-11).
-.PHONY: regress regress-rand regress-rand-sys regress-rand-npu regress-rand-vio regress-x regress-isa verify coremark
+.PHONY: regress regress-rand regress-rand-sys regress-rand-npu regress-rand-vio regress-x regress-isa verify coremark coremark-quick coremark-compare
 
 # --- OoO core aliases: identical suites, second binary ------------------------
 regress-ooo:
@@ -637,11 +654,16 @@ regress-x-ooo:
 	$(MAKE) regress-x X_RUN_BIN=$(X_BIN_OOO)
 regress-rand-vio-ooo:
 	$(MAKE) regress-rand-vio RUN_BIN=$(SIM_BIN_OOO)
+# The current OoO core completes 600 iterations in ~8.44 benchmark seconds,
+# so its full/reportable default is 720. A command-line CM_ITER still wins.
+coremark-ooo: CM_ITER = 720
 coremark-ooo:
-	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO)
+	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO) CM_ITER=$(CM_ITER)
+coremark-quick-ooo:
+	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO) CM_ITER=10 CM_REQUIRE_REPORT=0
 verify-ooo: regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo
 .PHONY: sim-ooo regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo \
-        coremark-ooo verify-ooo
+	    coremark-ooo coremark-quick-ooo verify-ooo
 
 run: $(RUN_BIN)
 	./$(RUN_BIN) +imem=$(PROG) $(DMEM_ARG)
@@ -685,5 +707,5 @@ clean:
 	rm -f sw/tests/*.elf sw/tests/*.bin sw/tests/*.hex
 	rm -f sw/ctests/*.elf sw/ctests/*.bin sw/ctests/*.hex
 	rm -f sw/coremark/coremark.elf sw/coremark/*.bin sw/coremark/*.hex
-	rm -f sw/coremark/.cm_flags_stamp coremark.log
+	rm -f sw/coremark/.cm_flags_stamp coremark*.log
 	rm -f sw/npu_mlp/mlp.elf sw/npu_mlp/*.bin sw/npu_mlp/*.hex

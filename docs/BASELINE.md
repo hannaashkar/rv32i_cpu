@@ -44,9 +44,14 @@ CoreMark 1.0 : 58.827106 / GCC15.2.0 -O2 -march=rv32i_zicsr / STATIC
 
 ```
 make coremark              # 600 iterations, ~510M cycles (minutes)
-make coremark CM_ITER=10   # quick correctness check (~8.5M cycles)
+make coremark-quick        # quick CRC-only correctness check (~8.5M cycles)
 make regress               # 9 directed suites, all green at baseline
 ```
+
+Current-tree control (2026-07-14): the exact 720-iteration image used for the
+D025 OoO comparison reproduced **58.828385 iterations/s = 1.176568
+CoreMark/MHz**, IPC 0.849, with `Correct operation validated` and 519,453,759
+instructions checked in lockstep. The baseline has not drifted.
 
 Environment: commit tagged `v1.0-inorder-baseline`; Verilator 5.048;
 xPack riscv-none-elf-gcc 15.2.0 (`-O2 -march=rv32i_zicsr -mabi=ilp32`);

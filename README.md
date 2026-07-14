@@ -1,15 +1,17 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/RISC--V-RV32I_+_Zicsr-brightgreen?style=for-the-badge&logo=riscv" />
+  <img src="https://img.shields.io/badge/RISC--V-RV32I--class_+_Zicsr-brightgreen?style=for-the-badge&logo=riscv" />
   <img src="https://img.shields.io/badge/Core-2--wide_Out--of--Order-orange?style=for-the-badge" />
   <img src="https://img.shields.io/badge/NPU-4×4_int8_Systolic-red?style=for-the-badge" />
   <img src="https://img.shields.io/badge/FPGA-DE10--Lite_(MAX_10)-blue?style=for-the-badge&logo=intel" />
+  <img src="https://img.shields.io/badge/RTL_line_coverage-99.2%25-8A2BE2?style=for-the-badge" />
+  <a href="https://github.com/hannaashkar/rv32i_cpu/actions/workflows/ci.yml"><img src="https://github.com/hannaashkar/rv32i_cpu/actions/workflows/ci.yml/badge.svg" /></a>
 </p>
 
 # RISC-V SoC — from a 5-stage core to an out-of-order CPU with an AI accelerator, running on real hardware
 
 **Hanna Ashkar** · Electrical Engineering, Technion · Digital Design / Computer Architecture / RISC-V
 
-A RISC-V **RV32I + Zicsr** system-on-chip built and measured in stages: a
+A RISC-V **RV32I-class + Zicsr** system-on-chip built and measured in stages: a
 classic 5-stage in-order pipeline, upgraded into a **2-wide out-of-order
 superscalar** with register renaming, speculative loads and a **store-set
 memory-dependence predictor**, extended with a tightly-coupled **4×4 int8
@@ -20,25 +22,56 @@ measurement matters as much as the RTL.
 
 https://github.com/user-attachments/assets/236d160b-ccb6-4e1c-92c8-c92e5c0e4397
 
+One compiled C binary runs on two independently measured cores. Speculation
+and recovery are checked at retirement against an independent ISA model, the
+accelerator runs a real quantized network, and an OoO SoC configuration has
+crossed simulation, place-and-route, timing closure, and physical bring-up.
+
 ---
 
 ## 📊 Results at a glance
 
-| Stage | What it is | Headline number |
-|---|---|---|
-| **In-order baseline** (`v1.0`) | Classic 5-stage, forwarding, branch prediction | **1.177 CoreMark/MHz**, IPC 0.849 |
-| **Out-of-order core** (`v2.0`) | 2-wide, renaming, ROB, speculation + recovery | **1.397 CoreMark/MHz (+18.8%)**, IPC 1.008 |
-| **NPU + MNIST MLP** (`v3.0`) | 4×4 int8 systolic array, quantized 784→32→10 net | **86× inference speedup** (in-order; 56× vs the faster OoO software path), 97.1% accuracy |
-| **FPGA bring-up** (`v3.1`) | PLL + SDC timing closure, block-RAM memories | In-order core **meets 50 MHz** on the DE10-Lite |
-| **OoO on hardware** | Issue-queue select restructured (2.33× Fmax), M9K program ROM | OoO + NPU + predictor **live at 16.67 MHz**, boots from flash |
-| **Speculative loads** | 8-entry load queue + store-set predictor (ISCA '98) | CoreMark **IPC 1.026**, pathological regression 90% recovered |
-| **Verification** | Golden-model lockstep co-sim + random + ISA suite | **14 bugs** found & documented, 0 divergence |
+| Evidence domain | Configuration | Headline result | Proof |
+|---|---|---|---|
+| **Tagged RTL milestones** | `v1.0-inorder-baseline` → `v2.0-ooo` | **1.177 → 1.397 CoreMark/MHz (+18.8%)**, IPC 0.849 → 1.008 | CRC-validated, reportable CoreMark runs |
+| **Current CPU A/B** | D025, exact same 720-iteration image | **1.176568 → 1.422560 CoreMark/MHz (+20.91%)**, IPC 0.849 → 1.026 | Two reportable runs; 519.45M instructions each, lockstep-clean |
+| **Current RTL + NPU** | D025, same quantized 784→32→10 network | **85.99× / 93.30×** cycle speedup on in-order / OoO; NPU and software bit-exact on **32/32** exported images | Cycle-accurate simulation + lockstep |
+| **Verification** | Both cores | **99.2% RTL line coverage**, 40/40 `riscv-tests` rv32ui, **14 RTL/SoC integration bugs** documented | Reproducible merge gates |
+| **Current Quartus build** | OoO + NPU + MNIST image, D025 | **34,714 / 49,760 LEs (70%)**, 95/182 M9Ks, timing met at 16.67 MHz with **+17.47 ns** slack | Fitter + slow-85C STA |
+| **Hardware-confirmed** | In-order bring-up; OoO revision containing the NPU | **50 MHz** in-order; **16.67 MHz** OoO, M9K code + standalone flash boot | DE10-Lite; OoO proof ran the LED walker |
+| **Pending acceptance** | Current D025 MNIST image | `.sof` built and timing-clean; **first physical MNIST flash still pending** | Simulation/Quartus complete, silicon demo not claimed |
 
-Performance numbers are from **cycle-accurate simulation** using the core's
-own hardware performance counters, CRC-validated where applicable, and
-reproducible with the commands below; FPGA results are **fitter/STA reports
-and live hardware**. Full methodology in
-[`docs/BASELINE.md`](docs/BASELINE.md).
+The offline integer model scores **97.13% on all 10,000 MNIST test images**;
+that is distinct from the 32-image RTL validation above. Performance numbers
+come from hardware counters in cycle-accurate simulation. The table labels
+Quartus-only, hardware-confirmed, and pending results separately. Full methods
+and evidence: [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md).
+
+---
+
+## System at a glance
+
+```mermaid
+flowchart LR
+    SW["Bare-metal RV32I-class + Zicsr software"]
+    subgraph CPU["Alternative CPU tops — same binary"]
+        direction TB
+        IO["5-stage in-order core"]
+        OOO["2-wide out-of-order core"]
+    end
+    SW --> IO
+    SW --> OOO
+    IO --> SOC["M9K instruction/data memories + MMIO"]
+    OOO --> SOC
+    OOO --> SPEC["Rename + ROB + IQ + SQ/LQ\nGshare/BTB/RAS + store sets"]
+    SOC --> NPU["4×4 int8 systolic NPU"]
+    SOC --> FPGA["DE10-Lite\nPLL, SDC, internal-flash boot"]
+    IO -. "retired PC / writeback / stores" .-> ISS["Independent project-ISA model"]
+    OOO -. "retired PC / writeback / stores" .-> ISS
+```
+
+The measured project brief, technical case studies, evidence ledger, and
+documented limitations live in [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md).
 
 ---
 
@@ -48,15 +81,19 @@ and live hardware**. Full methodology in
 Classic 5-stage pipeline (IF → ID → EX → MEM → WB) with full forwarding
 (EX←MEM, EX←WB, store-data, register write→read bypass), load-use
 interlock, a 64-entry 2-bit BHT + tagged BTB, and byte/half/word memory.
-Complete RV32I user-level ISA plus Zicsr counters (cycle/instret) for
-self-measurement. Runs compiled C and the full CoreMark benchmark —
-and meets **50 MHz** on the FPGA (STA Fmax 53.95 MHz).
+RV32I integer compute, load/store, and control-flow instructions, Zicsr
+operations, and cycle/instret counters for self-measurement. Traps and
+privileged execution are not implemented. It runs compiled C and the full
+CoreMark benchmark, and meets **50 MHz** on the FPGA (STA Fmax 53.95 MHz).
 
 ### 2. Out-of-order core — the upgrade (`rtl/ooo/`, [`docs/OOO.md`](docs/OOO.md))
 A 2-wide out-of-order superscalar that runs the **identical binary** as the
-baseline, +18.8% faster per clock:
+baseline. The initial `v2.0-ooo` milestone was +18.8% in CoreMark/MHz; the
+current D025 core measures **+20.91%** on the exact same 720-iteration image:
 - **Register renaming** — R10K-style merged physical register file (64
-  registers), RAT + free list
+  registers), RAT + free list. Its 6-read/3-write storage uses a textbook
+  live-value-table construction over **18 M9Ks**, cutting **8,895 LEs** with
+  cycle-identical behavior ([`docs/PRF_SHRINK.md`](docs/PRF_SHRINK.md))
 - **32-entry ROB**, 2-wide dispatch/retire; **16-entry unified issue queue**
   whose select logic was restructured from a serial scan into a balanced
   log-depth tree — **2.33× Fmax** at bit-identical IPC, proven by lockstep
@@ -73,11 +110,11 @@ baseline, +18.8% faster per clock:
 ### 3. NPU — the accelerator (`rtl/npu/`, [`docs/NPU.md`](docs/NPU.md))
 A 4×4 **output-stationary systolic array** of int8 MAC units, memory-mapped
 so both cores can drive it, mapping to **16 hardware multipliers** on the
-FPGA. It runs a **quantized MNIST MLP** (784→32→10, symmetric int8,
-TFLite-style requantization) at **97.1% accuracy** — and the same network
-runs **86× faster** on the array than in software on the in-order core
-(56× against the OoO core's faster software path). Correctness is
-proven **bit-exact** against the software path, and the memory-ordering
+FPGA. Its offline integer model reaches **97.13% accuracy on the full 10,000-
+image MNIST test set**. On RTL, the same network runs **85.99× faster** on the
+in-order core and **93.30× faster** on the current OoO core than their
+respective software paths, with NPU logits **bit-exact on 32/32 exported
+images**. The memory-ordering
 between CPU and accelerator is enforced in hardware (no software polling).
 
 ### 4. On silicon — where simulation meets physics ([`docs/DEMO.md`](docs/DEMO.md))
@@ -96,35 +133,45 @@ with the bring-up program); the same mechanism puts the MNIST demo's
 program *and neural-net weights* into block RAM at power-up — there is no
 loader, the weights are simply there. The MNIST demo (RTL + software
 complete, self-test lockstep-verified on both cores, 8/8 images correct;
-board bitstream now **builds and closes timing** — the gshare-predictor
-M9K shrink (D024) freed the fabric, the demo top fits at 88% LEs with
-+16.8 ns slack, and the `.sof` is built; the on-silicon flash is the
+board bitstream now **builds and closes timing** — the gshare-PHT and PRF
+M9K conversions (D024/D025) cut the current demo top to **34,714 / 49,760
+LEs (70%)** with **+17.47 ns** setup slack, and the `.sof` is built; the
+on-silicon MNIST flash is the
 remaining step): flip three switches to pick a handwritten
 digit, the 7-segment displays show the true label next to the network's
 answer — ~3 ms per inference at the 16.67 MHz board clock
-(simulation-measured), with the OoO core finishing the same work in
-**1.83× fewer cycles** than the in-order core.
+(simulation-measured), with the OoO core using **45.3% fewer cycles**
+(376,112 vs 687,018), a **1.83× cycle-speedup** over the in-order core.
 
 ---
 
 ## 🧪 Verification — the part that makes it real
 
 The whole SoC is checked by **golden-model lockstep co-simulation**: an
-independent RV32I instruction-set simulator ([`tb/verilator/iss.h`](tb/verilator/iss.h))
+independently implemented model of the project's ISA behavior
+([`tb/verilator/iss.h`](tb/verilator/iss.h))
 runs in step with the RTL and compares **every retired instruction** — PC,
 register writeback, and every memory store — aborting at the *exact*
-instruction on any divergence. Five stimulus layers all feed
-this check, on **both cores**:
+instruction on any divergence. Six merge-gate lanes run on **both cores**;
+the OoO core adds dedicated load-violation stress, and reportable benchmarks
+run separately through the same lockstep checker:
 
 | Layer | Command | Coverage |
 |---|---|---|
-| Directed tests | `make regress` | Targeted corner cases + every past bug as a regression |
-| Official ISA suite | `make regress-isa` | riscv-tests rv32ui **40/40** |
+| Directed tests | `make regress` | **20/20** targeted assembly+C suites |
+| Third-party integer suite | `make regress-isa` | `riscv-tests` rv32ui **40/40** |
 | Constrained-random | `make regress-rand` | 25 seeds × 3000 instructions, seeded/reproducible |
-| Violation stress | `make regress-rand-vio` | 1,185 real load-ordering violations exercising the recovery path |
-| Benchmark | `make coremark` | 433M-instruction run, CRC-validated **and** lockstep-checked |
+| System/decode tail | `make regress-rand-sys` | 1,148 FENCE/ECALL/EBREAK/reserved words per core |
+| NPU ordering | `make regress-rand-npu` | 282 adversarial bursts / 564 GO commands per core |
+| Violation stress (OoO only) | `make regress-rand-vio` | 1,185 real load-ordering violations exercising the recovery path |
+| Randomized initial/reset state | `make regress-x` | 80/80 program-seed runs per core |
+| Benchmark (separate) | `make coremark-compare` | Reportable same-image A/B, ~519.45M instructions/core, CRC-validated **and** lockstep-checked |
 
-Every real bug is root-caused and written up in
+Merged Verilator line coverage across both cores is **99.2% (1428/1440)**.
+The remaining 12 lines are published rather than waived away; see
+[`docs/VERIFICATION.md`](docs/VERIFICATION.md).
+
+Every real RTL/SoC integration bug is root-caused and written up in
 [`docs/BUGLOG.md`](docs/BUGLOG.md) (**14 so far**) — including ones only
 this infrastructure could catch: an issue-queue flush that cleared *zero*
 entries because a 6-bit relative age can never exceed 63 (B013), an
@@ -149,7 +196,7 @@ rtl/
 tb/verilator/   C++ harness + golden-model ISS (lockstep co-sim)
 sw/       assembly + C tests, C runtime, CoreMark port, MNIST MLP (sim + board)
 synth/    Quartus project for the DE10-Lite (+ checked-in memory images)
-docs/     BASELINE, OOO, LQ, STORESET, NPU, VERIFICATION, DECISIONS, BUGLOG, DEMO
+docs/     architecture, measurements, verification, bug/decision logs, project brief
 scripts/  MNIST training/quantization, random test generator, hex→MIF flow
 ```
 
@@ -158,19 +205,40 @@ scripts/  MNIST training/quantization, random test generator, hex→MIF flow
 ## ▶️ Reproduce the numbers
 
 ```bash
-make verify          # in-order core: directed + ISA + random suites, all lockstep-checked
-make verify-ooo      # same + violation stress on the out-of-order core
-make coremark        # in-order CoreMark (CRC-validated)   → 1.177 CoreMark/MHz
-make coremark-ooo    # out-of-order CoreMark               → 1.397 CoreMark/MHz (+18.8%)
+make verify          # in-order: all six lanes, including NPU + randomized reset
+make verify-ooo      # OoO: same six lanes + load-violation recovery stress
+make coremark        # full/reportable current in-order CoreMark run
+make coremark-ooo    # full/reportable current OoO run (720 iterations by default)
+make coremark-compare # both cores, exact same 720-iteration image + separate logs
+make coremark-quick  # short CRC-only smoke run (also: coremark-quick-ooo)
 make npu-mlp         # MNIST MLP: software vs NPU, bit-exact + measured speedup
 make npu-mlp-board   # the board demo's self-test, run in simulation (both cores: -ooo)
 make npu-tb          # NPU unit testbench vs C++ golden model
 make mif             # rebuild the FPGA memory-init images from the demo binaries
 ```
 
+On the project’s native Windows environment, run the same targets from
+PowerShell as `scripts\make.cmd verify`, `scripts\make.cmd verify-ooo`, etc.
+
 Toolchain: Verilator 5.048, xPack riscv-none-elf-gcc 15.2.0, Quartus Prime
 Lite 20.1. Target board: Terasic **DE10-Lite** (Intel MAX 10
 10M50DAF484C7G). Board bring-up + demo guide: [`docs/DEMO.md`](docs/DEMO.md).
+
+---
+
+## Current scope and limitations
+
+- Implements RV32I integer compute/load-store/control-flow behavior, Zicsr
+  operations, and cycle/instret counters. **ECALL/EBREAK do not trap**;
+  privileged modes, interrupts, precise exceptions, RV32M/A, and `fence.i`
+  are not implemented.
+- There is no MMU, cache hierarchy, SDRAM controller, or Linux-capable platform.
+  The SoC runs freestanding C, CoreMark, the integer tests, and the MNIST app.
+- NPU speedups are RTL-simulation cycle measurements. The latest MNIST
+  bitstream fits and closes timing, but its first physical run is still pending.
+- The OoO core wins per clock but still loses wall-clock performance to the
+  50 MHz in-order core on this FPGA. Current STA points to the LQ violation-CAM
+  path—not the scheduler—as the first timing target.
 
 ---
 
@@ -179,12 +247,14 @@ Lite 20.1. Target board: Terasic **DE10-Lite** (Intel MAX 10
 - ✅ RV32I baseline → CoreMark → tagged `v1.0-inorder-baseline`
 - ✅ 2-wide out-of-order core → `v2.0-ooo`
 - ✅ Tightly-coupled int8 NPU + quantized MNIST → `v3.0-npu`
-- ✅ Industrial-grade verification (lockstep, constrained-random, ISA suite, violation stress)
+- ✅ Industry-style verification (lockstep, 40/40 rv32ui, constrained-random, X/reset randomization, **99.2% line coverage**)
 - ✅ FPGA bring-up: PLL + SDC timing closure, block-RAM memories → `v3.1-inorder-fpga`
 - ✅ Speculative loads + load queue + store-set memory-dependence predictor
 - ✅ OoO core on the board: issue-queue select restructured (8.42 → 19.65 MHz), M9K program ROM, standalone flash boot
-- 🚧 On-board MNIST demo: RTL + software done, sim-verified on both cores (8/8 images); **bitstream now builds** (gshare→M9K shrink D024 freed the fabric: fits at 88% LEs, timing MET +16.8 ns, `.sof` built) — on-silicon flash is the last step
-- 🔜 2-stage pipelined scheduler (the ~42 MHz needed for the OoO core to beat in-order in wall-clock)
+- ✅ FPGA area recovery: gshare PHT + 6R/3W PRF moved into M9Ks; current demo top **70% LEs**, timing met
+- 🚧 On-board MNIST demo: RTL + software done, sim-verified on both cores (8/8 images); current D025 `.sof` builds at 70% LEs with +17.47 ns slack — on-silicon MNIST flash is the last step
+- 🔜 Decide and implement an LQ/CAM timing redesign; all current top-20 paths end at `rob_poison`
+- 🔜 Rerun STA, then optimize the next measured limiter (scheduler/JALR only if they surface)
 - 🔭 ASIC tapeout of the NPU via Tiny Tapeout (SkyWater 130 nm)
 
 ---
@@ -193,3 +263,5 @@ Lite 20.1. Target board: Terasic **DE10-Lite** (Intel MAX 10
 
 **Hanna Ashkar** — Electrical Engineering, Technion
 FPGA · Digital Design · Computer Architecture · RISC-V
+
+Technical project brief: [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md)

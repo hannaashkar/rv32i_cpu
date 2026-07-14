@@ -8,7 +8,7 @@ the RTL**.
 
 ## Roadmap
 
-1. **Baseline** (current): Verilator bring-up → complete RV32I → CoreMark →
+1. **Baseline** (current): Verilator bring-up → RV32I integer datapath/control → CoreMark →
    measure baseline IPC → tag `v1.0-inorder-baseline`.
 2. **2-wide out-of-order core**: register renaming, ~32-entry ROB, ~16-entry
    issue queue, 48–64 physical registers, gshare + BTB + RAS, speculative
@@ -607,16 +607,42 @@ NEXT.md Task 1 DONE — the audit's second (and last big) LE pig is gone.**
   GO commands per core**, zero lockstep divergence; normal/`--vio` hashes
   remained byte-identical. `regress-rand-npu` is now in both merge gates.
 
+**2026-07-14 (later) — evidence/recruiter audit + CoreMark reproducibility
+hardening (same `codex/verif-hardening` branch):**
+- README recast around four explicitly separated evidence domains: tagged RTL
+  milestones, current-tree simulation, Quartus fit/STA, and hardware-confirmed
+  configurations. Added `docs/PROJECT_BRIEF.md` with the measurement ledger,
+  technical case studies, reproduction commands, and honest scope boundaries.
+- Reproduced the current NPU measurements: **85.99× in-order** (96,367,418 /
+  1,120,610 cycles) and **93.30× OoO** (58,535,712 / 627,343), both 32/32 and
+  lockstep-clean. The old 55.89× OoO number is retained only as historical
+  context; public current-tree claims now use 93.30×. The 97.13% figure is
+  explicitly the offline integer model over 10,000 images; RTL compares 32.
+- Fixed a benchmark evidence hole: current OoO completes 600 CoreMark
+  iterations in 8.44 benchmark seconds, so CRCs passed while CoreMark itself
+  rejected the run as too short. Full targets now require `Correct operation
+  validated`; `coremark-ooo` defaults to 720 iterations; explicit
+  `coremark-quick[-ooo]` targets remain CRC-only.
+- Fresh exact-same-image 720-iteration A/B: in-order **1.176568
+  CoreMark/MHz, IPC 0.849** (612,038,902 cycles) vs D025 OoO **1.422560,
+  IPC 1.026** (506,194,158 cycles) = **+20.91%**. Both reportable, official
+  CRCs, ~519.45M retired instructions/core lockstep-clean. New
+  `coremark-compare` target builds once, runs both, keeps separate logs, and
+  machine-parses the normalized delta via `scripts/coremark_compare.py`.
+- Re-audited current D025 STA: Fmax **23.51 MHz** and every top-20 path is the
+  ~41.9 ns dmem/load-bypass/store-AGU/LQ-oldest-match/`rob_poison` chain.
+  NEXT/AUDIT now put an LQ timing decision ahead of the scheduler/JALR work.
+  No microarchitecture was changed; three options await Hanna in NEXT §2.
+
 **Next → see `docs/NEXT.md` (the start-here backlog).** In brief:
 (0) **Flash the MNIST demo** — `.sof` is built; DEFERRED by Hanna
 2026-07-12, it's her hardware step (USB-Blaster → digit demo → video).
 Do NOT auto-do. (1) ~~PRF→M9K LVT~~ **DONE + merged (D025, `ab79b50`,
-−8,895 LEs → 70%, IPC-neutral).** (2) 2-stage
-pipelined scheduler — OoO wall-clock fix; **now the top area lever is gone,
-the fabric has even more room (70%)** and this is the biggest remaining win.
-(3) JALR target adder (~10 ns off the dmem-load→rob_poison limiter — which
-is now the sole board critical path after D024/D025 cleared the frontend).
-(4) IQ payload split (~3k LEs). (5) Small infra: NPU on-board error
+−8,895 LEs → 70%, IPC-neutral).** (2) **LQ timing decision** — balanced
+parallel oldest-match tree (recommended), registered CAM request, or a
+conservative FPGA profile; current STA proves this is the first limiter.
+(3) 2-stage scheduler only after post-LQ STA. (4) JALR target adder only if it
+returns to the measured paths. (5) IQ payload split (~3k LEs). (6) Small infra: NPU on-board error
 patterns, `make -j` suites, loop/call-tree/RAS random coverage,
 INV-G2 negative self-test. **Env note:** the two old build landmines are
 GUARDED IN THE MAKEFILE — `make` just works; if overriding, VERILATOR_ROOT
