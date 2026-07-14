@@ -190,13 +190,11 @@ module ooo_iq (
 
     // port1: oldest ALU/CSR excluding port0's grant.
     //
-    // TIMING (D019, increment 1b): the previous version masked out gr0_i and
-    // re-scanned (elig_alu_m1), so port1's pick could not start until port0's
-    // grant (gr0_i) had resolved — two age-scans in series, a second long
-    // pole after 1a. Instead compute the oldest AND second-oldest ALU op IN
-    // PARALLEL (the 2nd is a find-first over the same vector with the 1st
-    // winner's one-hot cleared — one extra shallow tree, not a dependent
-    // re-scan), then resolve port1 with a terminal mux.
+    // D019 increment 1b removed the dependency on port0's *actual* grant by
+    // precomputing the first and second ALU candidates, then choosing between
+    // them with a terminal mux.  Its second candidate still depended on the
+    // first winner's one-hot clear, however; D027 routed STA exposed that
+    // remaining clear-and-repick serialization and D028 removes it below.
     //
     // Set semantics preserved EXACTLY: port1 = oldest ALU/CSR excluding
     // port0's actual grant. Port0 only ever removes an ALU entry from the
@@ -205,11 +203,63 @@ module ooo_iq (
     // gr0_i is not an elig_alu member at all, so the exclusion was a no-op in
     // the old code too, and port1 correctly gets the oldest ALU (p_alu_1st).
     // Verified equivalent by lockstep (not by inspection).
-    wire [4:0] p_alu_1st = pick(elig_alu);
-    wire [IQD-1:0] onehot_1st = (p_alu_1st[4])
-                               ? (16'b1 << p_alu_1st[3:0]) : 16'b0;
-    wire [IQD-1:0] elig_alu_no1 = elig_alu & ~onehot_1st;
-    wire [4:0] p_alu_2nd = pick(elig_alu_no1);
+    // D028 increment 1: D019 still formed its second eligibility vector from
+    // the first winner and then ran a second four-level pick tree.  Post-fit
+    // STA exposed that first-pick -> one-hot-clear -> second-pick chain as the
+    // complete top-20 critical-path family.  pick2() is one balanced top-two
+    // tournament: each node merges two sorted {oldest, second-oldest} pairs.
+    // No state or latency is added, and INV-I1 below keeps the old topology as
+    // a live simulation oracle for every winner in every cycle.
+    localparam PAIRW = 2*CANDW;
+
+    function [PAIRW-1:0] pair_cmb2;
+        input [PAIRW-1:0] a;               // lower-index half
+        input [PAIRW-1:0] b;               // higher-index half
+        reg [CANDW-1:0] a1, a2, b1, b2;
+        reg [CANDW-1:0] first, second;
+        begin
+            a1 = a[PAIRW-1:CANDW]; a2 = a[CANDW-1:0];
+            b1 = b[PAIRW-1:CANDW]; b2 = b[CANDW-1:0];
+            first = cmb2(a1, b1);
+            // If the left winner survives, the runner-up is the better of
+            // left's runner-up and right's winner; otherwise the symmetric
+            // pair applies.  Each cmb2 still sees lower indices on its left.
+            if (first == a1) second = cmb2(a2, b1);
+            else             second = cmb2(a1, b2);
+            pair_cmb2 = {first, second};
+        end
+    endfunction
+
+    function [9:0] pick2;
+        input [IQD-1:0] e;
+        reg [PAIRW-1:0] c  [0:15];
+        reg [PAIRW-1:0] l8 [0:7];
+        reg [PAIRW-1:0] l4 [0:3];
+        reg [PAIRW-1:0] l2 [0:1];
+        reg [PAIRW-1:0] top;
+        integer j;
+        begin
+            for (j = 0; j < 16; j = j + 1)
+                // The invalid runner-up carries the same age/index.  If a
+                // subtree has fewer than two candidates, cmb2 therefore
+                // preserves pick()'s otherwise-unused invalid index exactly.
+                c[j] = {{e[j], relage[j], j[3:0]},
+                        {1'b0, relage[j], j[3:0]}};
+            for (j = 0; j < 8; j = j + 1)
+                l8[j] = pair_cmb2(c[2*j], c[2*j+1]);
+            for (j = 0; j < 4; j = j + 1)
+                l4[j] = pair_cmb2(l8[2*j], l8[2*j+1]);
+            for (j = 0; j < 2; j = j + 1)
+                l2[j] = pair_cmb2(l4[2*j], l4[2*j+1]);
+            top = pair_cmb2(l2[0], l2[1]);
+            pick2 = {top[2*CANDW-1], top[CANDW+3:CANDW],
+                     top[CANDW-1],   top[3:0]};
+        end
+    endfunction
+
+    wire [9:0] p_alu_top2 = pick2(elig_alu);
+    wire [4:0] p_alu_1st = p_alu_top2[9:5];
+    wire [4:0] p_alu_2nd = p_alu_top2[4:0];
 
     wire port0_took_alu1st = gr0_v && p_alu_1st[4] && (gr0_i == p_alu_1st[3:0]);
     wire [4:0] p_alu1 = port0_took_alu1st ? p_alu_2nd : p_alu_1st;
@@ -341,6 +391,26 @@ module ooo_iq (
     end
 
 `ifdef VERILATOR
+    // D028 INV-I1: cycle-exact oracle for the top-two tournament.  Retain the
+    // former clear-and-repick topology in simulation only and compare both
+    // raw winners plus the architecturally consumed port-1 winner every edge.
+    wire [4:0] p_alu_1st_old = pick(elig_alu);
+    wire [IQD-1:0] onehot_1st_old = p_alu_1st_old[4]
+                                      ? (16'b1 << p_alu_1st_old[3:0])
+                                      : 16'b0;
+    wire [4:0] p_alu_2nd_old = pick(elig_alu & ~onehot_1st_old);
+    wire       port0_took_alu1st_old = gr0_v && p_alu_1st_old[4]
+                                       && (gr0_i == p_alu_1st_old[3:0]);
+    wire [4:0] p_alu1_old = port0_took_alu1st_old
+                            ? p_alu_2nd_old : p_alu_1st_old;
+
+    always @(posedge clk) if (!reset) begin
+        if (p_alu_1st !== p_alu_1st_old
+            || p_alu_2nd !== p_alu_2nd_old
+            || p_alu1 !== p_alu1_old)
+            $fatal(1, "ooo_iq INV-I1: top-two tournament != old repick");
+    end
+
     // D021 INV-P5/P9: every resident wait-mask bit must denote a LIVE,
     // still-unknown SQ slot — the strictly-older continuous-occupant
     // property the mask-deadlock-freedom proof rests on (a bit pointing at

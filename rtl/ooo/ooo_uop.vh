@@ -27,7 +27,7 @@
 `define U_WR        133
 `define U_TAG       139:134 // ROB tag {phase, idx}
 `define U_SQPOS     142:140 // store: own SQ slot
-`define U_SQCOL     146:143 // load: 4b SQ tail tag at dispatch
+`define U_SQCOL     146:143 // load/store: 4b SQ tail identity at dispatch
 `define U_CHK       150:147 // 4b checkpoint tag (branch/JALR)
 `define U_HASCHK    151
 `define U_GHR       161:152 // pre-shift GHR at fetch (train/restore)

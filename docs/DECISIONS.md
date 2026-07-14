@@ -5,6 +5,321 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D029 — 2026-07-14 — Remove proven-dead WB2 EX bypass; promote the OoO board clock from 16.67 MHz to timing-clean 25 MHz
+
+**Decision:** remove only the memory/load-result (WB2) arm from the generic EX
+operand bypass, retain both ALU-result arms, and promote the board PLL from /3
+to /2 after a real 25 MHz fit passes the project's timing-margin gate. Hanna
+delegated the performance-phase architecture call. D028's top-20 paths all ran
+from synchronous dmem through `wb_result2`, the generic operand mux,
+JALR/redirect logic, and the predictor, with a 36.433 ns worst path. Four
+options were evaluated:
+
+1. Mark the path false. Rejected because load consumers are legal; a false
+   path would hide live logic from STA without shortening it.
+2. Delay load dependants by one cycle. Rejected because it adds a load-use
+   bubble and changes IPC to avoid an overlap that the pipeline already makes
+   unreachable.
+3. Register/pipeline the load-to-redirect path. Deferred as a broader future
+   frequency option because it changes branch resolution, predictor alignment,
+   recovery timing, and IPC.
+4. Prove and remove only the unreachable WB2 mux arm. Selected because it cuts
+   the measured cone without adding state, latency, or scheduling rules.
+
+**Exact proof:** a successful memory-port load asserts its IQ wake while in EX
+and is captured into WB2 at edge E1. Only after E1 can a resident or same-edge-
+dispatched consumer become selectable. The earliest consumer is in SEL during
+E1-E2, enters RF at E2, and first reaches EX at E3. At E2 the load writes the
+PRF and its value enters the PRF's one-cycle shadow, which repairs the M9K
+OLD_DATA read for the dependent RF cycle. By E3 the load has left WB2, so the
+old WB2 EX-bypass predicate cannot win. Later consumers use the shadow or M9K
+bank. RAM, SQ-forwarded, MMIO, and NPU loads share this wake/SEL/RF/EX timing;
+a replayed load generates neither successful wake nor valid WB write. Flushes
+do not skip RF, and full ROB tags make reuse explicit.
+
+**Permanent oracle and directed proof:** Verilator-only **INV-B0** carries the
+decoder's exact `rs1_used`/`rs2_used` bits in a full-ROB-tagged shadow and
+proves source-shadow identity at EX. **INV-B1** mirrors the old WB0 -> WB1 ->
+WB2 priority and fatals if WB2 would win for either consumed source on any
+valid EX uop, including a same-cycle-killed uop. Positive counters prove the
+tests hit the immediately preceding SEL overlap. The new 24-check
+`load_wb_bypass.S` covers JALR bit clearing and signed immediates, a loaded
+return, cold/warm indirect control, all six branches in both outcomes with
+both source positions, both ALU ports and inputs, and store address/data. Its
+OoO run is 389 measured cycles / 177 instret and reports **26 load WBs, 26
+WB2-tagged SEL targets, all six bins (`3f`), 287 consumed EX operands, 27 real
+WB0/WB1 hits, and 0 WB2 hits**. Policies 0/1/2/3 all reach all six bins with
+zero WB2 hits.
+
+**Verification:** PRF/LQ/SQ/IQ public-interface models pass respectively
+300,014 / 250,026 / 300,087 / 300,553 cycles or ticks with zero failures. Both
+cores pass 21/21 directed+C, 40/40 rv32ui, 25/25 base random, 25/25
+system/decode-tail random, 25/25 NPU/MMIO random, and 84/84 randomized-X/reset;
+OoO also passes 25/25 violation stress, and alternate load policies are
+spot-regressed. Every system run is retirement-lockstep clean. Fresh combined
+coverage is **99.3% (1596/1607)** across 61 programs per core with zero test
+failures. No new bug was found.
+
+**Performance:** `hello.c` remains cycle-exact at **2,013 cycles / 1,882
+instret**. Reportable 720-iteration CoreMark is also cycle-exact to D028:
+**506,132,722 ticks, 10.122654 s, 71.127589 iterations/s at the common 50 MHz
+reporting reference = 1.422552 CoreMark/MHz, 506,197,207 full-run cycles,
+519,453,600 instret/lockstep comparisons, and IPC 1.026**. All official CRCs
+and validation checks pass. The printed rate is not a 25 MHz board
+measurement; the cycle-equivalent 25 MHz expectation is about 35.56
+iterations/s.
+During that run INV-B1 observes 41,073,750 load writebacks, 47,050,722
+WB2-tagged SEL targets, all six SEL bins, 760,546,213 consumed EX operands,
+179,766,342 live WB0/WB1 hits, and **zero WB2 hits**.
+
+**Quartus and clock call:** the conservative /3 characterization maps 37,676
+LEs, fits **34,886 / 49,760 LEs (70%)**, and reaches **29.14 MHz Fmax**. Its
+slow-85C setup/hold/recovery/removal slacks are +25.678 / +0.397 / +52.039 /
++1.583 ns. The projected /2 setup margin was +5.678 ns, clearing the required
+`>=3 ns` and preferred `>=5 ns` gates, so the projection was tested physically
+in place-and-route. The actual PLL-/2 build maps 37,688 LEs, fits **34,945 /
+49,760 LEs (70%)**, reports **31.29 MHz Fmax**, and at **25 MHz** has slow-85C
+setup/hold/recovery/removal slacks of **+8.045 / +0.339 / +34.440 / +1.506
+ns**. All corners pass and all five unconstrained counts are zero. Its top-20
+paths are now `rob_head` -> IQ readiness (31.517 ns worst); the dmem/WB2 family
+is absent. The shipping build clock is therefore promoted to **25 MHz**, a 50%
+clock increase with cycle-identical performance.
+
+**Physical freshness:** with MIF stamp `mlp`, final assembly succeeds with 0
+errors / 0 warnings. SHA-256 is
+`1ECB4B6D8E450587CC6F96C13D3008CDC90CE1DED64137D8C82B6786DE14E85D` for the
+3,216,563-byte `.sof` and
+`C2F40218950DE037BF214ABEBA6A83392F81744E10D627043C96CF7414439C75` for the
+1,450,248-byte `.pof`. These 25 MHz MNIST images are **not yet flashed**.
+Silicon truth remains the earlier 16.67 MHz OoO LED-walker/CFM demonstration;
+25 MHz hardware acceptance and MNIST remain physical next steps. Full design,
+proof, tests, coverage, timing, and image evidence:
+**[WB_BYPASS_TIMING.md](WB_BYPASS_TIMING.md)**.
+
+## D028 — 2026-07-14 — IQ port-1 clear-and-repick chain → cycle-exact balanced top-two tournament; scheduler pipeline deferred after IQ leaves the timing wall
+
+**Decision:** replace the issue queue's dependent `pick → one-hot clear →
+repick` path with one balanced sorted-pair tournament that returns the oldest
+and second-oldest eligible ALU entries together. Hanna delegated the
+performance-phase architecture call. D027 STA showed all top-20 paths crossing
+the old port-1 chain from `rob_head` into IQ operand-ready state, at 38.744 ns
+and 32 logic levels. Three options were evaluated:
+
+1. Register issue grants and split select from wakeup. This gives a hard timing
+   cut, but adds scheduling latency, changes dependency spacing and IPC, and
+   complicates flush and folded-PRF alignment.
+2. Bank or payload-split the IQ. This remains a useful area/frequency lever,
+   but is broader than the measured second-winner dependency.
+3. Compute the two oldest entries in one balanced tournament. This removes the
+   measured serial dependency while preserving the current cycle contract.
+
+Option 3 was selected as the smallest evidence-backed architectural change.
+
+**Exact contract:** every leaf is a sorted pair containing its real candidate
+and an invalid runner-up. Each `pair_cmb2()` node merges two sorted pairs into
+their oldest and second-oldest entries using the existing unsigned modular ROB
+age and lower-index tie break. Port 1 takes the runner-up only when port 0
+consumed the oldest ALU; otherwise it takes the oldest. The three public grants
+remain combinational. No state, pipeline stage, issue latency, wakeup rule,
+load replay rule, or recovery behavior changes.
+
+**Proof:** INV-I1 keeps the former pick/clear/repick topology live under
+Verilator and compares both raw winners plus the consumed port-1 result every
+cycle. The independent public-interface `iq-tb` checks all 162 payload bits,
+modular-age and class arbitration, select/load wakeup, masks, dispatch,
+replay/done, branch/full flush, and reset. It passes **300,553 cycles**
+(300,000 random), **74,571 complete-payload checks**, and **36,515 / 9,816 /
+28,240 port selections**, with mandatory occupancy 0–16 and winner coverage
+for all 3×16 leaves. Both cores pass 20/20 directed+C, 40/40 rv32ui, 25/25
+base/system/NPU random, and 80/80 X/reset; OoO also passes the LQ/SQ/IQ units
+and 25/25 violation stress. Every system run is lockstep-clean with zero
+divergence. Fresh combined coverage is **99.2% (1522/1534)** across 60 programs
+per core with zero failures; every D028 IQ addition is covered, and the same 12
+documented lines remain uncovered. `hello.c` is unchanged at **2,013 cycles /
+1,882 instret**.
+
+**Performance:** reportable 720-iteration CoreMark is cycle-exact to D027:
+**506,132,722 benchmark ticks, 10.122654 s, 71.127589 iterations/s = 1.422552
+CoreMark/MHz, 506,197,207 full-run cycles, 519,453,600 instret/lockstep
+comparisons, and IPC 1.026**. All official CRCs and reportable-validation
+checks pass with zero divergence. D028 therefore completes its merge gate as
+a pure implementation/timing change.
+
+**Quartus result:** Analysis & Synthesis is **37,874 LEs**; the routed board
+top is **35,096 / 49,760 LEs (71%)**, 15,138 registers, 632,444 memory bits,
+and 16 multiplier elements. IQ cost is **8,565 fitted LCs / 2,720 registers**
+versus D027's 8,270 / 2,720: +295 LCs and zero state growth. Slow-85C Fmax is
+**27.02 MHz**. At PLL /3, setup is +22.994 ns, hold +0.372 ns, recovery
++52.869 ns, and removal +1.653 ns; every timing class is positive and all five
+unconstrained counts are zero. The IQ is absent from all top-20 paths. The new
+family runs from dmem M9K read through load/JALR/redirect logic to a gshare PHT
+M9K address, at 36.433–36.132 ns.
+
+**Clock call:** retain **PLL /3 = 16.67 MHz**. Moving to 25 MHz consumes 20 ns
+of the measured setup slack and leaves a theoretical **+2.994 ns**, narrowly
+below the predeclared ≥3 ns production gate. A true scheduler pipeline is
+deferred because the scheduler is no longer the measured limiter; D029 targets
+the new load/JALR/redirect/PHT path first.
+
+**Physical freshness:** a final clean map+fit rerun after the last RTL text
+exactly reproduces the documented D028 numeric fit/STA results. With MIF stamp `mlp`,
+`quartus_asm rv32i_cpu` completed at 22:44:32 with **0 errors / 0 warnings** and
+produced fresh PLL-/3 D028 MNIST `.sof` and `.pof` images. The entire input to
+assembly freshness chain is clean. The images remain **unflashed** and are not
+hardware evidence; silicon truth remains the earlier LED-walker/CFM image at
+16.67 MHz. MNIST inference on the board is still pending. Full design and evidence:
+**[IQ_TIMING.md](IQ_TIMING.md)**.
+
+## D027 — 2026-07-14 — SQ forwarding/replay selector → cycle-exact balanced tree; serial path removed, IQ age/select becomes the measured wall
+
+**Decision:** replace only the store queue's source-ordered youngest-match
+scan with parallel candidate generation and a fixed 8→4→2→1 reduction tree.
+Hanna explicitly delegated the performance-phase architecture call. D026 STA
+showed that every top-20 setup path crossed the SQ's serial `m_found/m_age`
+chain, so this was the smallest change that could remove the measured wall
+without changing the load pipeline. Two more invasive alternatives were
+rejected for this increment:
+
+1. Register the SQ query and add a load-pipe stage. That cuts the path more
+   deeply, but changes load latency, replay timing, wakeup timing, and IPC.
+2. Return to a conservative load policy or weaken forwarding/replay. That
+   discards measured speculative-load IPC or changes memory semantics merely
+   to make timing easier.
+
+**Exact contract:** each entry forms a 38-bit candidate
+`{same_word_match, tag-head, full_word_store, data}` in parallel. A fixed
+three-level `youngest_of_two` maximum-age tree selects the youngest store
+strictly older than the load. A defensive equal-age tie chooses the
+left/lower physical index, exactly matching the old ascending scan's strict
+`>` update. `SW` forwards; an `SB`/`SH` selected in the same word requests the
+existing replay behavior; no match drives `q_data=0`. The strong-order
+`q_older` predicate is reduced separately so unknown-address and
+different-address older stores still block MMIO/NPU loads. No register,
+architectural state, load latency, or recovery rule changed.
+
+**Proof structure:** the original serial scan remains under `VERILATOR` as
+INV-S1 and compares all four public query outputs every cycle. INV-S2/S3 add
+ring-window, occupancy, unique-tag, committed-prefix, full fill-identity,
+retire/flush target, query-color, and drain-head checks. The independent
+public-interface `sq-tb` golden model covers allocation, fill, commit/drain,
+backpressure, branch and violation rewind, modular wrap, unknown ordering,
+same-word byte-offset cases, multi-match selection, and all eight winner
+leaves. It passes **300,087 cycles / 300,088 queries / 45,313 forwards /
+90,252 conflicts / 36,668 drains / 2,382 flushes**, including 300,000
+deterministic random cycles and every mandatory coverage bin.
+
+**System verification:** both cores pass 20/20 directed+C, 40/40 rv32ui,
+25/25 base random, 25/25 system/decode-tail random, 25/25 NPU/MMIO-ordering
+random, and 80/80 randomized-reset runs. OoO additionally passes 25/25
+load-violation stress. Every run is retirement-lockstep clean. Final combined
+line coverage is **99.2% (1488/1500)**; the tree adds covered RTL while the
+same 12 documented defensive/configuration and board-facing MMIO lines remain
+uncovered. No new RTL bug was found, so the bug log remains B001–B015.
+
+**Performance:** reportable 720-iteration CoreMark is cycle-identical to
+D026: **71.127589 iterations/s = 1.422552 CoreMark/MHz, IPC 1.026,
+506,197,207 cycles, 519,453,600 retired instructions lockstep-compared**, and
+10.122654 benchmark seconds with the official CRCs and `Correct operation
+validated`. The rewrite is therefore a pure implementation/timing change.
+
+**Quartus result (MAX 10 slow-85C, MNIST board top, default seed, PLL /3):**
+
+- Analysis & Synthesis: **37,529 LEs** versus 37,589 on D026. The SQ is
+  **924 combinational LEs / 596 registers** versus 943 / 596: −19 logic,
+  exactly zero state change.
+- Routed fit: **34,787 / 49,760 LEs (70%)**, 95/182 M9Ks, 16 multiplier
+  elements, one PLL. The SQ is 1,024 fitted LCs / 596 registers (D026:
+  1,022 / 596); the two-cell routed variation is placement noise, not state.
+- Slow-85C Fmax is **25.47 MHz**, up from 25.10 MHz (+1.5%). At the shipping
+  16.67 MHz clock, setup slack is **+20.745 ns**, hold +0.337 ns, recovery
+  +51.478 ns, removal +1.295 ns; every reported timing class is positive and
+  all five unconstrained counts are zero.
+- The old SQ serial names are absent from every top-20 path. All new top-20
+  paths are the next wall: `rob_head` through the IQ's relative-age,
+  eligibility, select, and wakeup cone into `r1`, with a **38.744 ns data
+  delay / 32 logic levels** worst path.
+
+**Clock call:** retain PLL **/3 = 16.67 MHz**. The routed 25.47 MHz Fmax would
+leave only about **+0.745 ns** theoretical setup slack at an exact 25 MHz
+clock, below the predeclared +3 ns minimum (+5 ns preferred) production gate.
+Because the /3 characterization already proves that margin is insufficient,
+an expensive /2 compile was not used to manufacture a borderline claim. The
+fresh D027 `.sof` and `.pof` were assembled at /3 (0 errors/0 warnings) but
+remain unflashed; physical MNIST acceptance is still Hanna's board step.
+
+**Lesson:** balancing a measured serial cone can be completely successful and
+still yield a small top-level Fmax gain when a near-equal path is waiting
+behind it. D027 removed the SQ from the timing wall with cycle-exact proof;
+STA now makes the next architectural decision unambiguous: a true IQ
+select/wakeup pipeline is required for a robust 25 MHz—and ultimately
+~42 MHz wall-clock parity with the 50 MHz in-order core.
+
+## D026 — 2026-07-14 — LQ violation selector → balanced 8→4→2→1 tree; Fmax 23.51 → 25.10 MHz, LQ leaves the top-20 paths
+
+**Decision:** replace only the 8-entry LQ violation CAM's source-ordered
+minimum-age accumulation with a fixed three-level reduction tree. Hanna
+explicitly delegated architectural decisions for this phase; the selection
+was evidence-driven because every D025 top-20 path crossed the old serial
+`m_found/m_age` chain. Two alternatives were rejected for this increment:
+
+1. Registering the store-fill/CAM request offered a larger timing cut but
+   introduced delayed-poison correctness around branch restore, ROB-tag reuse,
+   and flush-at-head recovery.
+2. Compiling out speculative-load recovery for an FPGA profile would trade
+   away roughly 2% CoreMark IPC and make simulation and board policies differ.
+
+**Exact contract:** all eight match predicates are formed in parallel. Each
+candidate is `{match, tag-head, tag}`; a fixed 8→4→2→1 `oldest_of_two` tree
+selects the smallest unsigned 6-bit modular age, with the lower LQ index
+winning an equal-age tie exactly like the old 0→7 scan. No hit still drives
+`vio_tag=0`. There is no new register, recovery state, or pipeline latency.
+The old scan remains under `VERILATOR` as an independent cycle-by-cycle
+equivalence oracle (INV-L1); unique live tags and allocation capacity are
+also asserted (INV-L2/L3). A public-interface C++ model independently checks
+the full allocation/execute/retire/flush lifecycle and selector.
+
+**Correctness bug found on the way:** the new unit-test review exposed B015:
+a slot1-only load used `free1` even when slot0 was not a load. At LQ occupancy
+seven it dispatched without allocating an entry, so a later violation could
+be missed. Allocation is now packed (`free0` for slot1-only, `free1` for the
+second load), including the same-edge branch-flush kill. See BUGLOG B015.
+
+**Verification:** `make lq-tb` passes **250,026 cycles**, 218,731 store
+probes, and 55,318 matches including modular wrap, multi-hit oldest selection,
+byte-mask overlap, physical-index/age disagreement, pre-edge semantics, and
+the B015 occupancy-seven reproducer. Final full gates are green on both cores:
+20/20 directed+C, 40/40 rv32ui, 25/25 base random, 25/25 system-tail random,
+25/25 NPU-ordering random, and 80/80 randomized-reset runs; OoO additionally
+passes 25/25 violation stress. All are retirement-lockstep clean, with the
+tree-vs-scan oracle live in every OoO run.
+
+**Performance:** reportable 720-iteration CoreMark remains **IPC 1.026** and
+passes the official CRC/duration gate: 71.127589 iterations/s,
+506,197,207 cycles, and 519,453,600 lockstep comparisons. Versus the D025
+same-image run, throughput changes by only −0.0006%; that tiny nonzero delta
+comes from B015 correctly consuming the final LQ slot in rare slot1-only
+groups, not from the combinational tree.
+
+**Quartus result (MAX 10 slow-85C, same board project/default seed):**
+
+- Fmax **23.51 → 25.10 MHz (+6.8%)**; current 16.67 MHz PLL /3 setup slack
+  is **+20.166 ns**, hold +0.307 ns, and all paths are constrained.
+- The LQ is absent from every top-20 path. Its map cost is 746 combinational
+  ALUTs / 336 registers versus 725 / 336 before (+21 ALUTs, no state); fitted
+  LQ cost is 853 LCs / 336 registers versus 840 / 336.
+- Whole board top: **34,798 / 49,760 LEs (70%)**, 95/182 M9Ks, 16 multiplier
+  elements. This is +84 fitted LEs (+0.24% of the device) versus D025.
+- New limiter: dmem load result → dependent memory AGU → the **SQ's serial
+  youngest-matching-store forward/replay scan** → IQ load wakeup, 39.156 ns /
+  41 logic levels. The old LQ/`rob_poison` cone has been successfully retired.
+
+**Clock call:** keep the shipping board at **16.67 MHz** for now. Fmax 25.10
+leaves only about 0.17 ns theoretical setup margin at an exact 25 MHz PLL /2,
+which is not production-quality headroom. Balance the now-measured SQ selector,
+refit, and sign off the actual /2 configuration only if slow-85C margin is
+comfortably positive. The D026 `.sof` was reassembled successfully (0 errors,
+0 warnings); physical MNIST flashing remains a separate acceptance step.
+
 ## D025 — 2026-07-12 — PRF → 18 banked M9K blocks via an LVT (branch `prf-m9k-lvt`); board top 88% → 70% LEs (−8,895), IPC-neutral
 
 **Context:** the 2026-07-11 audit's per-entity fit table named `ooo_prf` =
@@ -88,6 +403,15 @@ and synthesis.
   behind). The slow-85C Fmax *panel* reads 18.64 MHz — the pessimistic
   all-paths floor that counts SDC-excluded async paths (same figure as
   D022's board top); the constrained slack is the sign-off number.
+
+**Current-tree reportable performance confirmation (2026-07-14):** the exact
+same 720-iteration CoreMark image ran on both models. In-order measured
+58.828385 iterations/s (**1.176568 CoreMark/MHz**, 612,038,902 cycles, IPC
+0.849); D025 OoO measured 71.127993 iterations/s (**1.422560 CoreMark/MHz**,
+506,194,158 cycles, IPC 1.026): **+20.91% CoreMark/MHz**. Both runs exceeded
+10 benchmark seconds, printed `Correct operation validated`, matched the 2K
+CRCs, and checked ~519.45M retired instructions against the ISS with zero
+divergence. `make coremark-compare` preserves this same-image A/B protocol.
 
 **Interview story:** the read-address fold Hanna has now defended four times
 (dmem D016, imem D022, gshare D024, PRF D025) + a textbook FPGA multi-ported

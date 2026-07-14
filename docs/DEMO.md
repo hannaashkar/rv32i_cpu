@@ -3,17 +3,33 @@
 How to flash and drive the two board demos. The flashing procedure and the
 LED walker are hardware-proven (2026-07-11); the MNIST demo is
 lockstep-verified in simulation on both cores — its first board flash is
-the acceptance step. **The MNIST bitstream now builds** — the gshare→M9K
-shrink (D024) freed the fabric, so the demo top fits at 88% LEs and
-closes timing at 16.67 MHz with +16.8 ns slack; `output_files/
-rv32i_cpu.sof` is built and ready to flash. (Before D024 it failed to
-route at 96% LEs — if you are on an older checkout and hit "Can't route",
-that is why.) If anything surprises you, the board state section at the
-bottom is the first thing to check.
+the acceptance step. **The MNIST bitstream now builds** — D024 first made
+the design routable by moving the gshare PHT into M9Ks; D025 then moved the
+6R/3W PRF into 18 M9Ks, D026 balanced the LQ selector, D027 balanced the SQ
+selector, and D028 replaced the IQ port-1 clear-and-repick chain with a
+cycle-exact top-two tree. D029 then proved that the memory/load-WB arm of the
+generic EX bypass could never win, added a permanent source-use oracle, and
+removed the dead mux input without changing a cycle.
+
+The current top on local branch `codex/load-wb-bypass-cut` (not merged or
+pushed) fits at **34,945 / 49,760 LEs (70%)**, uses **15,140 registers,
+632,444 memory bits, and 16 multiplier elements**, and reaches **31.29 MHz**
+slow-85C Fmax. The actual PLL-/2 build closes at **25 MHz** with **+8.045 ns**
+slow-85C setup slack; hold, recovery, and removal are also positive, and every
+path is constrained. Both full lockstep gates pass, and line coverage is
+**99.3% (1596/1607)** across 61 programs per core. Freshness-clean D029 MNIST
+`.sof` and `.pof` images were assembled from MIF stamp `mlp`, but remain
+**unflashed**. Hardware truth is still the earlier 16.67 MHz LED-walker/CFM
+image; MNIST has not run on silicon. Before
+D024 it failed to route at 96% LEs — if you are on an older checkout and hit
+"Can't route", that is why. If anything surprises you, the board state
+section at the bottom is the first thing to check.
 
 The board top (`rtl/top/de10_top.v`) is the **2-wide out-of-order core**
-with the store-set predictor and the NPU, clocked at **16.67 MHz** (PLL /3
-from the 50 MHz oscillator). Which *program* the FPGA runs is decided at
+with the store-set predictor and the NPU. The current source is configured for
+**25 MHz** (PLL /2 from the 50 MHz oscillator); this is timing-clean but not
+yet hardware-confirmed. It is a 50% configured-clock increase over the
+hardware-proven 16.67 MHz image. Which *program* the FPGA runs is decided at
 compile time by the MIF images in `synth/`:
 
 | `make` target | Program in the bitstream |
@@ -51,7 +67,8 @@ it enters the interactive loop:
 - **SW[2:0]** selects one of 8 handwritten-digit images (from the MNIST
   test set, baked into the data memory at synthesis).
 - The CPU drives the NPU through the two matrix multiplies of a quantized
-  784→32→10 network (~47k cycles ≈ 3 ms at 16.67 MHz — instant) and shows:
+  784→32→10 network (~47k cycles ≈ 1.9 ms at the configured 25 MHz;
+  simulation-derived until the board acceptance run) and shows:
 
 ```
   HEX5          HEX2      HEX0
@@ -64,11 +81,13 @@ it enters the interactive loop:
   correctly, so HEX2 and HEX0 always match — flip switches and watch the
   answer track the truth.
 
-What this exercises end-to-end on silicon: the banked M9K instruction ROM,
-the MIF-initialized 64 KB block-RAM data memory (weights present at
-power-up — there is no loader), the OoO core's IO-ordering interlocks
-against a busy NPU, the systolic array itself, and the new 7-segment MMIO
-path. The same binary's self-test phase runs in the Verilator regression
+Once flashed, this will exercise end-to-end on silicon: the banked M9K
+instruction ROM, the MIF-initialized 64 KB block-RAM data memory (weights
+present at power-up — there is no loader), the OoO core's IO-ordering
+interlocks against a busy NPU, the systolic array itself, and the new
+7-segment MMIO path. Until that acceptance step, these are simulation +
+fit/STA claims, not an on-board inference claim. The same binary's self-test
+phase runs in the Verilator regression
 (`make npu-mlp-board[-ooo]`), lockstep-compared against the golden model.
 
 ## The LED walker (D022 bring-up test)
@@ -82,8 +101,10 @@ walker runs, fetch/PLL/timing are healthy.
 ## Board state notes
 
 - Displays dark + LEDs dead → press KEY0 (reset). Still dead → reflash.
-- The `.pof` currently in the MAX 10 flash is whatever was last programmed
-  with Verify — check `git log synth/` to correlate with a bitstream.
+- The last documented `.pof` programmed and verified in the MAX 10 flash is
+  the earlier 16.67 MHz OoO LED walker/CFM image—not D029 and not MNIST
+  inference. Check `git log synth/` to correlate any later manually
+  programmed bitstream.
 - Pin assignments in `synth/rv32i_cpu.qsf` are copied from the proven
   build and are **not to be edited**; the HEX0-5 pins (added 2026-07-11,
   D023) were verified against two independent DE10-Lite references.

@@ -138,6 +138,25 @@ soft int8 path and the NPU path, requires bit-exact logit agreement plus
 agreement with the offline integer reference, and prints both cycle
 counts (rdcycle) — that ratio is the reported speedup.
 
+## Measured end-to-end result
+
+Measured D025 runs (32 images, 32/32 classifications correct, NPU logits
+bit-exact with the software path) measure:
+
+| Core | Software cycles | NPU cycles | Cycle speedup |
+|---|---:|---:|---:|
+| 5-stage in-order | 96,367,418 | 1,120,610 | **85.99×** |
+| 2-wide OoO | 58,535,712 | 627,343 | **93.30×** |
+
+The displayed ratios match the on-core program's fixed-point x100 output
+(truncated to two decimal places).
+
+The offline integer network scores **97.13%** over the full 10,000-image MNIST
+test set. The speedups above are cycle-accurate simulation measurements from
+the cores' `cycle` CSRs, not physical-board latency measurements. Reproduce
+them with `make npu-mlp` and `make npu-mlp-ooo` (or the `scripts\make.cmd`
+wrapper in PowerShell).
+
 ## Verification
 
 1. **Unit TB** (`tb/verilator/npu_tb.cpp`, `make npu-tb`): drives the raw
@@ -149,18 +168,40 @@ counts (rdcycle) — that ratio is the reported speedup.
 3. **Directed C tests** in the regression: `sw/ctests/npu_basic.c`
    (register semantics, signed edge cases, accumulate/clear behavior),
    `sw/ctests/npu_matmul.c` (random tiled GEMMs vs software reference).
-4. **Assertions** (Verilator-only, `ifdef` guarded): MMIO write while
+4. **NPU/MMIO constrained-random** (`make regress-rand-npu`): 25 seeds
+   inject staged A/B traffic, back-to-back GO, immediate-producer address
+   and store-data dependencies while busy, ordered readbacks, and unmapped
+   reads. Measured 2026-07-14: 282 adversarial bursts / 564 GO commands per
+   core, both cores 25/25 lockstep-clean. This is the permanent B010/B011 gate.
+5. **Assertions** (Verilator-only, `ifdef` guarded): MMIO write while
    busy is fatal on both cores; an IO load completing with an SQ forward
    hit is fatal in the OoO core.
-5. Existing suites (`make verify` / `verify-ooo`) must stay green — the
+6. Existing suites (`make verify` / `verify-ooo`) must stay green — the
    interlocks only add replay/stall conditions that are quiescent for
    non-IO code.
 
 ## FPGA status
 
-Synthesized into both cores (16 embedded 9×9 multipliers + ~900 FFs);
-`quartus_map` gate stays 0-errors. The FPGA top remains `cpu_pipeline`
-until the B005 PLL/timing stage. Note the real-board MLP demo needs the
-B006 BRAM stage first (4 KB imem / 1 KB dmem can't hold 26 KB of
-weights) — this stage's measured speedup numbers come from simulation
-with `SIM_BIG_MEM`, same as the CoreMark baseline.
+The array maps to 16 embedded 9×9 multipliers and is integrated with both
+cores. An OoO configuration containing the NPU, M9K-resident program memory,
+PLL, and timing constraints has run on the DE10-Lite at 16.67 MHz and booted
+standalone from internal flash; that hardware proof used the LED walker, not
+NPU inference. The current D029 MNIST top on local branch
+`codex/load-wb-bypass-cut` (not merged or pushed)—including M9K-initialized
+weights—fits at **34,945 / 49,760 LEs (70%)**, uses **15,140 registers,
+632,444 memory bits, and 16 embedded 9×9 multiplier elements**, and reaches
+**31.29 MHz** slow-85C Fmax. An actual PLL-/2 build closes at **25 MHz** with
+**+8.045 ns** slow-85C setup slack; hold, recovery, and removal are also
+positive, and all paths are constrained. The new top-20 family is
+ROB-head-to-IQ operand readiness, not the deleted memory/load-WB bypass.
+
+D029 removed that bypass only after an edge-by-edge dependency proof and added
+a permanent source-use oracle that reconstructs the old mux priority on every
+valid EX uop. Full unit/system/benchmark gates pass with zero lockstep
+divergence, and line coverage is **99.3% (1596/1607)** across 61 programs per
+core. Freshness-clean PLL-/2 D029 MNIST `.sof` and `.pof` images were assembled
+from MIF stamp `mlp`, but remain unflashed. The only hardware-confirmed OoO
+image remains the earlier 16.67 MHz LED walker/CFM build; the first physical
+MNIST inference is still pending. The **85.99× / 93.30×** speedup table above
+retains its D025 provenance because the full MLP benchmark was not rerun for
+D026–D029.

@@ -11,6 +11,42 @@
 > **docs/DECISIONS.md**. Statements below about "no LQ" are the
 > historical D013 simplification, kept for the record.
 
+> **Current implementation note (D027).** The eight-entry SQ still obeys the
+> D013 architectural contract, but its youngest-older forwarding/replay query
+> is now a cycle-exact fixed 8→4→2→1 reduction tree with the original serial
+> scan retained as a live Verilator oracle. The independent lifecycle model,
+> invariants, exact selection rules, and routed timing result are documented in
+> **[SQ_TIMING.md](SQ_TIMING.md)**. This is an implementation optimization—no
+> SQ state, load latency, ordering rule, or IPC changed.
+
+> **Current implementation note (D028).** Port 1 no longer waits for an
+> oldest-ALU pick, a one-hot clear, and a second complete pick. One balanced
+> sorted-pair tree returns the oldest two candidates together, with the old
+> topology retained as Verilator oracle INV-I1. The public grants remain
+> combinational, `hello.c` remains 2013 cycles / 1882 instret, and no issue or
+> dependency latency changed. The independent 300,553-cycle IQ model and
+> routed evidence are in **[IQ_TIMING.md](IQ_TIMING.md)**. The full both-core
+> verification gate and fresh 99.2% line coverage are green. Reportable
+> CoreMark is cycle-exact to D027 at 1.422552 CoreMark/MHz and IPC 1.026, with
+> official CRCs and zero divergence. D028 is fully signed off but remains
+> local—not merged or pushed. Freshness-clean MNIST `.sof`/`.pof` images are
+> assembled at PLL /3 but unflashed, so D028 is not hardware-confirmed.
+>
+> **Current implementation note (D029).** The generic EX bypass retains the
+> WB0/WB1 ALU-result arms but no longer includes WB2's load result. Loads wake
+> dependents only when the result enters WB; the earliest consumer reads the
+> same value through the folded PRF direct/shadow path and cannot reach EX
+> while the producer remains in WB. A permanent ROB-tagged source-use shadow
+> plus exact old-priority oracle fatals if WB2 would ever win; the full gate and
+> CoreMark exercise all six select-port/source bins with zero hits. The new
+> 24-check directed regression covers load→JALR, every branch condition and
+> outcome, both ALU inputs/ports, and store address/data. D029 is cycle-exact,
+> raises current coverage to 99.3% (1596/1607), and closes an actual PLL-/2
+> board fit at 25 MHz: 34,945 LEs (70%), Fmax 31.29 MHz, slow-85C setup
+> +8.045 ns. Fresh `.sof`/`.pof` images are unflashed; physical truth remains
+> the earlier 16.67 MHz OoO LED-walker/CFM image. See
+> **[WB_BYPASS_TIMING.md](WB_BYPASS_TIMING.md)** and D029.
+
 ## Measured result (2026-07-03, same binary as the baseline)
 
 | Metric | in-order (v1.0 tag) | **ooo_cpu** | delta |
@@ -50,7 +86,7 @@ top with the identical external interface (clk, reset, leds, switches).
 | RAT | 32 × 6b | speculative map; x0 → p0 always |
 | Free list | ring of 32 tags | initially p32..p63 |
 | ROB | 32 entries | 2-wide alloc/retire; stores result value (lockstep/debug) |
-| Issue queue | 16 entries | unified, age = ROB tag order, select ≤3/cycle (1/port) |
+| Issue queue | 16 entries | unified, age = ROB tag order, select ≤3/cycle (1/port); balanced oldest and top-two tournaments (D019/D028) |
 | Store queue | 8 entries | alloc at rename, fill at EX, commit at retire |
 | Checkpoints | 8 | per control-flow op (branch/JALR): RAT+flhead+sqtail+GHR+RAS-TOS |
 | gshare | 1024 × 2b PHT, 10b GHR | speculative GHR update at fetch, repair on restore |
@@ -72,7 +108,8 @@ IS (select ≤3: port0 ALU+branch/JALR, port1 ALU+CSR, port2 AGU/mem;
     can replay)
 RF (PRF read, 6R; write-first internal bypass)
 EX (ALUs, branch resolve vs prediction, AGU + SQ forward-check + dmem
-    read; WB-stage result bus bypasses into EX operands)
+    read; WB0/WB1 ALU result buses bypass into EX operands, while load
+    results arrive through the folded PRF direct/shadow path per D029)
 WB (PRF write 3W; ROB done + result value; load tag broadcast)
 RT (retire ≤2 in order from ROB head; ≤1 store/cycle -> SQ commit to
     dmem/mmio; free old ptag; free checkpoint; instret += count)

@@ -1,14 +1,43 @@
 # Speculative Loads + Load Queue (LQ) — design spec
 
-Status: **IMPLEMENTED + verified + measured** (2026-07-08). See DECISIONS.md
-**D020** for the results and BUGLOG **B013** for the one bug found (IQ not
-cleared on the violation flush). Correctness: OoO 14/14 + 40/40 riscv-tests
-(incl. `ld_st`) + 25/25 random + 25/25 `--vio` stress (1185 violations), all
-lockstep-clean. IPC: **violation-frequency-dependent** — CoreMark (rare)
-**1.026** spec vs **1.006** cons (+2.0%), but hello.c (15 stack-spill
-violations) is −36% because the flush-at-head recovery is a ~46-cyc drain (open
-Hanna call — see D020: keep on / default off / add a store-set predictor). Fmax:
-**26.32 MHz** slow-85C (LQ CAM did not erode the D019 wall).
+Status: **IMPLEMENTED, policy-tuned, and timing-optimized** (D020/D021/D026).
+See DECISIONS.md D020 for speculative-load recovery, D021 for the shipping
+store-set policy, and D026 for the cycle-exact balanced violation selector.
+BUGLOG B013 records the recovery-flush defect; B015 records the final-slot
+slot1-only allocation defect found by D026's new standalone unit model.
+
+D026's LQ evidence remains: `lq-tb` passed 250,026 directed+random cycles,
+and the serial violation select was replaced by a fixed 8→4→2→1 minimum-age
+tree with a simulation-only serial oracle. That change improved board-top
+Fmax **23.51 → 25.10 MHz (+6.8%)** and removed the LQ from every top-20 path.
+
+Current D029 system evidence on local branch `codex/load-wb-bypass-cut` (not
+merged or pushed) adds the cycle-exact SQ selector, IQ top-two tournament, and
+the proven-dead WB2 load-result EX-bypass cut. Both cores pass **21/21
+directed+C, 40/40 rv32ui, 25/25 base, 25/25 system-tail, 25/25 NPU/MMIO, and
+84/84 randomized-reset runs**; OoO additionally passes every queue/PRF unit
+model and 25/25 `--vio`, all lockstep-clean. Line coverage is **99.3%
+(1596/1607)** across 61 programs/core. Reportable CoreMark remains cycle-exact
+at **1.422552 CoreMark/MHz, IPC 1.026, 506,197,207 cycles, and 519,453,600
+retired instructions lockstep-checked**. D029's permanent exact source-use
+oracle exercises all six select-port/source bins and reports zero cases where
+the removed WB2 arm would have won.
+
+The D029 board top fits at **34,945 LEs (70%)**. Actual PLL-/2 multi-corner STA
+closes at **25 MHz**, with restricted Fmax **31.29 MHz**, slow-85C setup
+**+8.045 ns**, hold **+0.339 ns**, every timing class positive, and zero
+unconstrained paths. The former dmem/load-bypass family is absent from the top
+20; the measured limiter is now `rob_head → IQ readiness/operand selection`
+(worst 31.517 ns). Freshness-clean D029 MNIST `.sof`/`.pof` images are
+assembled but unflashed; hardware truth remains the earlier 16.67 MHz
+LED-walker/CFM image.
+
+Historical D020 characterization remains useful: CoreMark (rare violations)
+was **1.026** speculative vs **1.006** conservative IPC (+2.0%), while hello.c
+(15 stack-spill violations) regressed 36% because flush-at-head recovery costs
+~46 cycles. D021's store-set predictor resolved that policy call. D020's
+**26.32 MHz** figure was a bare-core characterization on a different fit; it
+is not the current board-top Fmax.
 Owner decisions (Hanna): LQ depth = **8**; recovery = **poison + flush at ROB
 head** (Strategy B). Derived from a 3-way adversarial design analysis
 (structure / recovery / ISS-lockstep).

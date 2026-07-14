@@ -713,14 +713,17 @@ module ooo_cpu #(
         .w2_en(wb_v[2] && wb_wr[2]), .w2_tag(wb_pd[2]), .w2_data(wb_result2)
     );
 
-    // WB-stage bypass into EX operands
+    // ALU-port WB bypass into EX operands.  The former memory-port/WB2 arm
+    // was proven unreachable for every consumed operand and removed in D029:
+    // loads wake one stage later than ALU ops, so their dependants receive the
+    // value through the PRF direct/shadow path before reaching EX.  Keeping
+    // wb_result2 off this mux cuts the dmem -> JALR -> predictor timing path.
     function [31:0] bypass;
         input [5:0]  ps;
         input [31:0] rfval;
         begin
             if (wb_v[0] && wb_wr[0] && wb_pd[0] == ps)      bypass = wb_val[0];
             else if (wb_v[1] && wb_wr[1] && wb_pd[1] == ps) bypass = wb_val[1];
-            else if (wb_v[2] && wb_wr[2] && wb_pd[2] == ps) bypass = wb_result2;
             else                                            bypass = rfval;
         end
     endfunction
@@ -822,12 +825,14 @@ module ooo_cpu #(
         .tail4(sq_tail4),
         .fill_en(p2_store),
         .fill_pos(ex_u[2][`U_SQPOS]),
+        .fill_tag4(ex_u[2][`U_SQCOL]),
         .fill_addr(p2_addr), .fill_data(p2_data),
         .fill_f3(ex_u[2][`U_F3]),
         .retire_mark_en((ret0_ok && rob_st[h0]) || (ret1_ok && rob_st[h1])),
         .mw_valid(mw_valid), .mw_addr(mw_addr), .mw_data(mw_data),
         .mw_f3(mw_f3), .mw_ready(mw_ready),
-        .q_addr(p2_addr), .q_color4(ex_u[2][`U_SQCOL]),
+        .q_valid(p2_load), .q_addr(p2_addr),
+        .q_color4(ex_u[2][`U_SQCOL]),
         .q_hit(sq_qhit), .q_data(sq_qdata), .q_conflict(sq_qconf),
         .q_older(sq_qolder),
         // flush on branch mispredict OR a load-violation flush-at-head.
@@ -1180,6 +1185,216 @@ module ooo_cpu #(
     wire kill_s0  = kill_all || (restore_en && is_younger(sel0_uop[`U_TAG], restore_tag));
     wire kill_s1  = kill_all || (restore_en && is_younger(sel1_uop[`U_TAG], restore_tag));
     wire kill_s2  = kill_all || (restore_en && is_younger(sel2_uop[`U_TAG], restore_tag));
+
+`ifdef VERILATOR
+    // D029 INV-B1: the former third arm of bypass() (memory-port WB) is
+    // unreachable
+    // for every architecturally consumed EX operand.  Loads wake dependants
+    // at EX-success (wb_v2_isload_wr), one cycle BEFORE their value occupies
+    // wb_v[2].  A newly-ready dependant can therefore be in SEL while the
+    // load is in WB, but the intervening RF stage prevents it from reaching
+    // EX until the load has left WB.  The PRF write/read fold supplies that
+    // value; an EX bypass from wb_result2 should never be required.
+    //
+    // Comparing both stored tags blindly would be wrong: ALUAPC replaces A
+    // for AUIPC, ALUSRC replaces B for immediate ops, PASS_B (LUI/JAL) uses
+    // neither PRF value, CSR-immediate forms consume zimm, loads use only the
+    // base, and stores/branches use both sources.  The packed uop omits the
+    // decoder's exact rs*_used bits, so a Verilator-only ROB-tagged shadow
+    // carries those authoritative bits through reordering.  This also keeps
+    // rd=x0 ALU operations distinct from FENCE/ECALL/EBREAK NOP-class uops,
+    // which cannot be reconstructed perfectly from U_WR after x0 squashing.
+    reg        d029_src1_used [0:ROBD-1];
+    reg        d029_src2_used [0:ROBD-1];
+    reg [5:0]  d029_src_tag   [0:ROBD-1];
+    integer d029_i;
+    always @(posedge clk) begin
+        if (reset) begin
+            for (d029_i = 0; d029_i < ROBD; d029_i = d029_i + 1) begin
+                d029_src1_used[d029_i] <= 1'b0;
+                d029_src2_used[d029_i] <= 1'b0;
+                d029_src_tag[d029_i]   <= 6'b0;
+            end
+        end else begin
+            if (ok0) begin
+                d029_src1_used[rob_tail] <= dr_r1u0;
+                d029_src2_used[rob_tail] <= dr_r2u0;
+                d029_src_tag[rob_tail]   <= tag0;
+            end
+            if (ok1) begin
+                d029_src1_used[rob_tail + 5'd1] <= dr_r1u1;
+                d029_src2_used[rob_tail + 5'd1] <= dr_r2u1;
+                d029_src_tag[rob_tail + 5'd1]   <= tag1;
+            end
+        end
+    end
+
+    function d029_uses_ps1;
+        input [`UOPW-1:0] u;
+        reg [5:0] t;
+        begin
+            t = u[`U_TAG];
+            d029_uses_ps1 = (d029_src_tag[t[4:0]] == t)
+                            && d029_src1_used[t[4:0]];
+        end
+    endfunction
+
+    function d029_uses_ps2;
+        input [`UOPW-1:0] u;
+        reg [5:0] t;
+        begin
+            t = u[`U_TAG];
+            d029_uses_ps2 = (d029_src_tag[t[4:0]] == t)
+                            && d029_src2_used[t[4:0]];
+        end
+    endfunction
+
+    function d029_shadow_tag_ok;
+        input [`UOPW-1:0] u;
+        reg [5:0] t;
+        begin
+            t = u[`U_TAG];
+            d029_shadow_tag_ok = (d029_src_tag[t[4:0]] == t);
+        end
+    endfunction
+
+    // Mirror the exact priority of the pre-D029 bypass(): WB2 would have been
+    // reached only when neither earlier WB arm matched the same source tag.
+    function d029_wb2_reaches;
+        input [5:0] ps;
+        begin
+            d029_wb2_reaches = !(wb_v[0] && wb_wr[0] && wb_pd[0] == ps)
+                               && !(wb_v[1] && wb_wr[1] && wb_pd[1] == ps)
+                               &&  (wb_v[2] && wb_wr[2] && wb_pd[2] == ps);
+        end
+    endfunction
+
+    function d029_wb01_reaches;
+        input [5:0] ps;
+        begin
+            d029_wb01_reaches = (wb_v[0] && wb_wr[0] && wb_pd[0] == ps)
+                             || (!(wb_v[0] && wb_wr[0] && wb_pd[0] == ps)
+                                 && wb_v[1] && wb_wr[1] && wb_pd[1] == ps);
+        end
+    endfunction
+
+    // Check every valid EX uop, including one being killed this cycle.  The
+    // scheduling proof does not depend on architectural survival, and the
+    // stronger form also protects pre-kill predictor/queue side effects.
+    wire d029_ex0_check = ex_v[0];
+    wire d029_ex1_check = ex_v[1];
+    wire d029_ex2_check = ex_v[2];
+    wire [5:0] d029_ex_wb2_hits = {
+        d029_ex2_check && d029_uses_ps2(ex_u[2])
+                       && d029_wb2_reaches(ex_u[2][`U_PS2]),
+        d029_ex2_check && d029_uses_ps1(ex_u[2])
+                       && d029_wb2_reaches(ex_u[2][`U_PS1]),
+        d029_ex1_check && d029_uses_ps2(ex_u[1])
+                       && d029_wb2_reaches(ex_u[1][`U_PS2]),
+        d029_ex1_check && d029_uses_ps1(ex_u[1])
+                       && d029_wb2_reaches(ex_u[1][`U_PS1]),
+        d029_ex0_check && d029_uses_ps2(ex_u[0])
+                       && d029_wb2_reaches(ex_u[0][`U_PS2]),
+        d029_ex0_check && d029_uses_ps1(ex_u[0])
+                       && d029_wb2_reaches(ex_u[0][`U_PS1])
+    };
+
+    wire [5:0] d029_ex_wb01_hits = {
+        d029_ex2_check && d029_uses_ps2(ex_u[2])
+                       && d029_wb01_reaches(ex_u[2][`U_PS2]),
+        d029_ex2_check && d029_uses_ps1(ex_u[2])
+                       && d029_wb01_reaches(ex_u[2][`U_PS1]),
+        d029_ex1_check && d029_uses_ps2(ex_u[1])
+                       && d029_wb01_reaches(ex_u[1][`U_PS2]),
+        d029_ex1_check && d029_uses_ps1(ex_u[1])
+                       && d029_wb01_reaches(ex_u[1][`U_PS1]),
+        d029_ex0_check && d029_uses_ps2(ex_u[0])
+                       && d029_wb01_reaches(ex_u[0][`U_PS2]),
+        d029_ex0_check && d029_uses_ps1(ex_u[0])
+                       && d029_wb01_reaches(ex_u[0][`U_PS1])
+    };
+    wire [5:0] d029_ex_operands = {
+        d029_ex2_check && d029_uses_ps2(ex_u[2]),
+        d029_ex2_check && d029_uses_ps1(ex_u[2]),
+        d029_ex1_check && d029_uses_ps2(ex_u[1]),
+        d029_ex1_check && d029_uses_ps1(ex_u[1]),
+        d029_ex0_check && d029_uses_ps2(ex_u[0]),
+        d029_ex0_check && d029_uses_ps1(ex_u[0])
+    };
+
+    // Positive coverage: a load's WB tag should be observable on dependent
+    // operands in SEL, demonstrating that the tests exercise the exact timing
+    // window immediately before the asserted-unreachable EX case.
+    wire [5:0] d029_sel_wb2_targets = {
+        sel2_v && !kill_s2 && d029_uses_ps2(sel2_uop)
+               && d029_wb2_reaches(sel2_uop[`U_PS2]),
+        sel2_v && !kill_s2 && d029_uses_ps1(sel2_uop)
+               && d029_wb2_reaches(sel2_uop[`U_PS1]),
+        sel1_v && !kill_s1 && d029_uses_ps2(sel1_uop)
+               && d029_wb2_reaches(sel1_uop[`U_PS2]),
+        sel1_v && !kill_s1 && d029_uses_ps1(sel1_uop)
+               && d029_wb2_reaches(sel1_uop[`U_PS1]),
+        sel0_v && !kill_s0 && d029_uses_ps2(sel0_uop)
+               && d029_wb2_reaches(sel0_uop[`U_PS2]),
+        sel0_v && !kill_s0 && d029_uses_ps1(sel0_uop)
+               && d029_wb2_reaches(sel0_uop[`U_PS1])
+    };
+
+    function [63:0] d029_pop6;
+        input [5:0] x;
+        begin
+            d029_pop6 = {63'b0, x[0]} + {63'b0, x[1]}
+                       + {63'b0, x[2]} + {63'b0, x[3]}
+                       + {63'b0, x[4]} + {63'b0, x[5]};
+        end
+    endfunction
+
+    reg [63:0] d029_load_wb_count;
+    reg [63:0] d029_sel_target_count;
+    reg [5:0]  d029_sel_target_seen;
+    reg [63:0] d029_ex_operand_count;
+    reg [63:0] d029_wb01_ex_hit_count;
+    reg [63:0] d029_wb2_ex_hit_count;
+    always @(posedge clk) begin
+        if (reset) begin
+            d029_load_wb_count    <= 64'd0;
+            d029_sel_target_count <= 64'd0;
+            d029_sel_target_seen  <= 6'b0;
+            d029_ex_operand_count <= 64'd0;
+            d029_wb01_ex_hit_count <= 64'd0;
+            d029_wb2_ex_hit_count <= 64'd0;
+        end else begin
+            d029_load_wb_count <= d029_load_wb_count
+                                  + {63'b0, wb_v[2] && wb_wr[2] && wb_ld[2]};
+            d029_sel_target_count <= d029_sel_target_count
+                                     + d029_pop6(d029_sel_wb2_targets);
+            d029_sel_target_seen <= d029_sel_target_seen
+                                    | d029_sel_wb2_targets;
+            d029_ex_operand_count <= d029_ex_operand_count
+                                      + d029_pop6(d029_ex_operands);
+            d029_wb01_ex_hit_count <= d029_wb01_ex_hit_count
+                                      + d029_pop6(d029_ex_wb01_hits);
+            d029_wb2_ex_hit_count <= d029_wb2_ex_hit_count
+                                     + d029_pop6(d029_ex_wb2_hits);
+            if ((d029_ex0_check && !d029_shadow_tag_ok(ex_u[0]))
+                || (d029_ex1_check && !d029_shadow_tag_ok(ex_u[1]))
+                || (d029_ex2_check && !d029_shadow_tag_ok(ex_u[2])))
+                $fatal(1, "ooo_cpu INV-B0: EX source-use shadow tag mismatch");
+            if (d029_ex_wb2_hits != 6'b0)
+                $fatal(1, "ooo_cpu INV-B1: WB2 bypass reached by consumed EX operand hits=%b wb_pd2=%0d pc0=%h pc1=%h pc2=%h",
+                       d029_ex_wb2_hits, wb_pd[2], ex_u[0][`U_PC],
+                       ex_u[1][`U_PC], ex_u[2][`U_PC]);
+        end
+    end
+
+    final begin
+        $display("[D029 INV-B1] load_wb=%0d sel_load_targets=%0d sel_seen=%02h ex_operands=%0d wb01_ex_hits=%0d wb2_ex_hits=%0d",
+                 d029_load_wb_count, d029_sel_target_count,
+                 d029_sel_target_seen,
+                 d029_ex_operand_count, d029_wb01_ex_hit_count,
+                 d029_wb2_ex_hit_count);
+    end
+`endif
 
     always @(posedge clk or posedge reset) begin
         if (reset) begin
