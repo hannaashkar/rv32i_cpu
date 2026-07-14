@@ -1,5 +1,5 @@
 // ============================================================================
-// ooo_sq — 8-entry store queue (decision D013)
+// ooo_sq — 8-entry store queue (decisions D013/D027)
 //
 // Purpose:    Stores execute (address+data capture) out of order into this
 //             queue, but memory only changes at retire: the ROB marks the
@@ -31,6 +31,7 @@ module ooo_sq (
     // fill from the memory pipe's EX stage
     input  wire        fill_en,
     input  wire [2:0]  fill_pos,
+    input  wire [3:0]  fill_tag4,    // full identity; assertion-only in synth
     input  wire [31:0] fill_addr,
     input  wire [31:0] fill_data,
     input  wire [2:0]  fill_f3,
@@ -49,12 +50,13 @@ module ooo_sq (
     input  wire        mw_ready,
 
     // load forwarding query (combinational)
+    input  wire        q_valid,      // qualifies color-window assertions
     input  wire [31:0] q_addr,
     input  wire [3:0]  q_color4,
-    output reg         q_hit,        // full-word match: use q_data
-    output reg  [31:0] q_data,
-    output reg         q_conflict,   // partial overlap: replay the load
-    output reg         q_older,      // ANY older store still buffered —
+    output wire        q_hit,        // full-word match: use q_data
+    output wire [31:0] q_data,
+    output wire        q_conflict,   // partial overlap: replay the load
+    output wire        q_older,      // ANY older store still buffered —
                                      // IO loads replay on this (D014/B010)
 
     // squash: restore tail to checkpoint value, killing younger entries
@@ -121,34 +123,190 @@ module ooo_sq (
     assign mw_f3    = f3[hidx];
 
     // ------------------------------------------------------------------
-    // load forwarding: youngest older matching store decides
+    // Load forwarding: balanced youngest-older reduction (D027).
+    //
+    // The old source-ordered loop synthesized into an 8-deep compare/mux
+    // cascade on every D026 top-20 setup path. Form all older/match predicates
+    // in parallel and carry the selected payload through a fixed 8 -> 4 -> 2
+    // -> 1 tree. The 38-bit tuple is:
+    //   {valid_match, age_from_head, is_full_word, store_data}
+    // The larger age is the YOUNGEST store older than the load. On the
+    // defensive equal-age case, the left/lower-index entry wins exactly like
+    // the old ascending scan's strict-`>` update. No register or load latency
+    // is added. q_older remains an independent ordering predicate: unknown or
+    // different-address older stores must still block MMIO/NPU loads.
     // ------------------------------------------------------------------
-    integer k;
-    reg        m_found;
-    reg [3:0]  m_age;
-    reg [31:0] m_data;
-    reg        m_word;
+    function [37:0] youngest_of_two;
+        input [37:0] left;
+        input [37:0] right;
+        begin
+            if (!left[37])
+                youngest_of_two = right;
+            else if (right[37] && (right[36:33] > left[36:33]))
+                youngest_of_two = right;
+            else
+                youngest_of_two = left;
+        end
+    endfunction
+
+    wire [3:0] q_age;
+    wire [3:0] q_entry_age [0:SQD-1];
+    wire [SQD-1:0] q_older_vec;
+    wire [SQD-1:0] q_match_vec;
+    wire [37:0] q_cand [0:SQD-1];
+
+    assign q_age = q_color4 - head;
+
+    genvar qg;
+    generate for (qg = 0; qg < SQD; qg = qg + 1) begin : GEN_Q_CAND
+        assign q_entry_age[qg] = tag4[qg] - head;
+        assign q_older_vec[qg] = v[qg] && (q_entry_age[qg] < q_age);
+        assign q_match_vec[qg] = q_older_vec[qg]
+                               && known[qg]
+                               && (addr[qg][31:2] == q_addr[31:2]);
+        assign q_cand[qg] = {q_match_vec[qg], q_entry_age[qg],
+                             (f3[qg][1:0] == 2'b10), data[qg]};
+    end endgenerate
+
+    wire [37:0] q_l1 [0:3];
+    wire [37:0] q_l2 [0:1];
+    wire [37:0] q_winner;
+    wire        q_older_lo;
+    wire        q_older_hi;
+
+    assign q_l1[0] = youngest_of_two(q_cand[0], q_cand[1]);
+    assign q_l1[1] = youngest_of_two(q_cand[2], q_cand[3]);
+    assign q_l1[2] = youngest_of_two(q_cand[4], q_cand[5]);
+    assign q_l1[3] = youngest_of_two(q_cand[6], q_cand[7]);
+    assign q_l2[0] = youngest_of_two(q_l1[0], q_l1[1]);
+    assign q_l2[1] = youngest_of_two(q_l1[2], q_l1[3]);
+    assign q_winner = youngest_of_two(q_l2[0], q_l2[1]);
+
+    assign q_older_lo = |q_older_vec[3:0];
+    assign q_older_hi = |q_older_vec[7:4];
+    assign q_older    = q_older_lo || q_older_hi;
+    assign q_hit      = q_winner[37] && q_winner[32];
+    assign q_data     = q_winner[37] ? q_winner[31:0] : 32'b0;
+    assign q_conflict = q_winner[37] && !q_winner[32];
+
+`ifdef VERILATOR
+    initial if (SQD != 8)
+        $fatal(1, "ooo_sq: fixed forwarding tree requires SQD=8 (got %0d)",
+               SQD);
+
+    // INV-S1: independent copy of the original source-order scan. Every
+    // standalone and full-core Verilator cycle is an equivalence check for
+    // all four externally visible query outputs.
+    reg        q_ref_found;
+    reg [3:0]  q_ref_age;
+    reg [31:0] q_ref_data;
+    reg        q_ref_word;
+    reg        q_ref_older;
+    integer    q_ref_i;
     always @(*) begin
-        m_found = 1'b0; m_age = 4'd0; m_data = 32'b0; m_word = 1'b0;
-        q_older = 1'b0;
-        for (k = 0; k < SQD; k = k + 1) begin
-            if (v[k] && ((tag4[k] - head) < (q_color4 - head)))
-                q_older = 1'b1;
-            if (v[k] && known[k]
-                && (addr[k][31:2] == q_addr[31:2])
-                && ((tag4[k] - head) < (q_color4 - head))) begin
-                if (!m_found || ((tag4[k] - head) > m_age)) begin
-                    m_found = 1'b1;
-                    m_age   = tag4[k] - head;
-                    m_data  = data[k];
-                    m_word  = (f3[k][1:0] == 2'b10);   // SW covers any load
+        q_ref_found = 1'b0;
+        q_ref_age   = 4'd0;
+        q_ref_data  = 32'b0;
+        q_ref_word  = 1'b0;
+        q_ref_older = 1'b0;
+        for (q_ref_i = 0; q_ref_i < SQD; q_ref_i = q_ref_i + 1) begin
+            if (v[q_ref_i]
+                && ((tag4[q_ref_i] - head) < (q_color4 - head)))
+                q_ref_older = 1'b1;
+            if (v[q_ref_i] && known[q_ref_i]
+                && (addr[q_ref_i][31:2] == q_addr[31:2])
+                && ((tag4[q_ref_i] - head) < (q_color4 - head))) begin
+                if (!q_ref_found
+                    || ((tag4[q_ref_i] - head) > q_ref_age)) begin
+                    q_ref_found = 1'b1;
+                    q_ref_age   = tag4[q_ref_i] - head;
+                    q_ref_data  = data[q_ref_i];
+                    q_ref_word  = (f3[q_ref_i][1:0] == 2'b10);
                 end
             end
         end
-        q_hit      = m_found && m_word;
-        q_data     = m_data;
-        q_conflict = m_found && !m_word;
     end
+
+    integer sq_inv_i;
+    integer sq_inv_j;
+    reg [3:0] sq_inv_live;
+    reg [3:0] sq_inv_age;
+    reg [3:0] sq_inv_commit_age;
+    reg [3:0] sq_inv_flush_age;
+    always @(posedge clk) if (!reset) begin
+        if ((q_hit !== (q_ref_found && q_ref_word))
+            || (q_data !== q_ref_data)
+            || (q_conflict !== (q_ref_found && !q_ref_word))
+            || (q_older !== q_ref_older))
+            $fatal(1, "ooo_sq INV-S1: tree=%b/%08x/%b/%b scan=%b/%08x/%b/%b",
+                   q_hit, q_data, q_conflict, q_older,
+                   q_ref_found && q_ref_word, q_ref_data,
+                   q_ref_found && !q_ref_word, q_ref_older);
+
+        // INV-S2: local ring-window and request contracts. They turn silent
+        // pointer corruption (for example alloc_n=3) into an exact failure.
+        if (occupancy > 4'd8)
+            $fatal(1, "ooo_sq INV-S2: occupancy %0d exceeds depth", occupancy);
+        if (alloc_n > 2)
+            $fatal(1, "ooo_sq INV-S2: alloc_n=%0d is outside 0..2", alloc_n);
+        if (({1'b0, occupancy} + {3'b0, alloc_n}) > 5'd8)
+            $fatal(1, "ooo_sq INV-S2: allocation exceeds capacity");
+
+        sq_inv_live = 0;
+        sq_inv_commit_age = cptr - head;
+        for (sq_inv_i = 0; sq_inv_i < SQD; sq_inv_i = sq_inv_i + 1) begin
+            if (v[sq_inv_i]) begin
+                sq_inv_live = sq_inv_live + 1;
+                sq_inv_age = tag4[sq_inv_i] - head;
+                if (tag4[sq_inv_i][2:0] != sq_inv_i[2:0])
+                    $fatal(1, "ooo_sq INV-S2: slot/tag mismatch at %0d",
+                           sq_inv_i);
+                if (sq_inv_age >= occupancy)
+                    $fatal(1, "ooo_sq INV-S2: live tag outside window");
+                if (comm[sq_inv_i] != (sq_inv_age < sq_inv_commit_age))
+                    $fatal(1, "ooo_sq INV-S2: committed prefix broken");
+                if (comm[sq_inv_i] && !known[sq_inv_i])
+                    $fatal(1, "ooo_sq INV-S2: committed store is unknown");
+            end
+            for (sq_inv_j = sq_inv_i + 1; sq_inv_j < SQD;
+                 sq_inv_j = sq_inv_j + 1)
+                if (v[sq_inv_i] && v[sq_inv_j]
+                    && (tag4[sq_inv_i] == tag4[sq_inv_j]))
+                    $fatal(1, "ooo_sq INV-S2: duplicate live tag %0d",
+                           tag4[sq_inv_i]);
+        end
+        if (sq_inv_live != occupancy)
+            $fatal(1, "ooo_sq INV-S2: live=%0d occupancy=%0d",
+                   sq_inv_live, occupancy);
+        if (sq_inv_commit_age > occupancy)
+            $fatal(1, "ooo_sq INV-S2: cptr lies beyond tail");
+
+        // INV-S3: operation targets and externally visible implications.
+        if (fill_en
+            && (!v[fill_pos] || known[fill_pos]
+                || (tag4[fill_pos] != fill_tag4)))
+            $fatal(1, "ooo_sq INV-S3: fill target is not live unknown");
+        if (retire_mark_en
+            && (!v[cptr[2:0]] || !known[cptr[2:0]] || comm[cptr[2:0]]))
+            $fatal(1, "ooo_sq INV-S3: retire target is not live known next");
+        if (flush_en) begin
+            sq_inv_flush_age = flush_tail4 - head;
+            if ((sq_inv_flush_age < sq_inv_commit_age)
+                || (sq_inv_flush_age > occupancy))
+                $fatal(1, "ooo_sq INV-S3: flush tail outside cptr..tail");
+        end
+        if (q_valid && ((q_color4 - head) > occupancy))
+            $fatal(1, "ooo_sq INV-S3: load color outside head..tail");
+        if (q_hit && q_conflict)
+            $fatal(1, "ooo_sq INV-S3: hit and conflict both set");
+        if ((q_hit || q_conflict) && !q_older)
+            $fatal(1, "ooo_sq INV-S3: match without older store");
+        if (mw_valid
+            && (!v[hidx] || !known[hidx] || !comm[hidx]
+                || (tag4[hidx] != head)))
+            $fatal(1, "ooo_sq INV-S3: invalid drain head");
+    end
+`endif
 
     // ------------------------------------------------------------------
     // state

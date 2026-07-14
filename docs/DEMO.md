@@ -5,11 +5,15 @@ LED walker are hardware-proven (2026-07-11); the MNIST demo is
 lockstep-verified in simulation on both cores — its first board flash is
 the acceptance step. **The MNIST bitstream now builds** — D024 first made
 the design routable by moving the gshare PHT into M9Ks; D025 then moved the
-6R/3W PRF into 18 M9Ks, and D026 balanced the LQ violation selector. The
-current top fits at **34,798 / 49,760 LEs (70%)**, reaches **25.10 MHz**
-slow-85C Fmax, and closes timing at 16.67 MHz with **+20.166 ns** setup slack;
-`output_files/rv32i_cpu.sof` was reassembled from the D026 fit on 2026-07-14
-and is ready to flash. (Before D024 it failed to
+6R/3W PRF into 18 M9Ks, D026 balanced the LQ violation selector, and D027
+balanced the SQ forwarding/replay selector without changing a cycle. The
+current top on local branch `codex/sq-forward-tree` (not merged or pushed)
+fits at **34,787 / 49,760 LEs (70%)**, reaches **25.47 MHz**
+slow-85C Fmax, and closes timing at 16.67 MHz with **+20.745 ns** setup and
+**+0.337 ns** hold slack; every timing check is positive and zero paths are
+unconstrained. Fresh `.sof` and `.pof` images were assembled from the D027
+PLL-/3 fit on 2026-07-14 and are ready to flash, but neither D027 image has
+been programmed on the board. (Before D024 it failed to
 route at 96% LEs — if you are on an older checkout and hit "Can't route",
 that is why.) If anything surprises you, the board state section at the
 bottom is the first thing to check.
@@ -87,8 +91,10 @@ walker runs, fetch/PLL/timing are healthy.
 ## Board state notes
 
 - Displays dark + LEDs dead → press KEY0 (reset). Still dead → reflash.
-- The `.pof` currently in the MAX 10 flash is whatever was last programmed
-  with Verify — check `git log synth/` to correlate with a bitstream.
+- The last documented `.pof` programmed and verified in the MAX 10 flash is
+  the earlier 16.67 MHz OoO LED walker/CFM image—not D027 and not MNIST
+  inference. Check `git log synth/` to correlate any later manually
+  programmed bitstream.
 - Pin assignments in `synth/rv32i_cpu.qsf` are copied from the proven
   build and are **not to be edited**; the HEX0-5 pins (added 2026-07-11,
   D023) were verified against two independent DE10-Lite references.

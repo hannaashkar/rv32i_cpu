@@ -49,7 +49,7 @@ make regress               # 9 directed suites, all green at baseline
 ```
 
 Current-tree control (2026-07-14): the exact 720-iteration image used for the
-D026 OoO comparison reproduced **58.828385 iterations/s = 1.176568
+D027 OoO comparison reproduced **58.828385 iterations/s = 1.176568
 CoreMark/MHz**, IPC 0.849, with `Correct operation validated` and 519,453,759
 instructions checked in lockstep. The baseline has not drifted.
 

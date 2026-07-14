@@ -61,6 +61,7 @@ obj_dir_probe/
 obj_dir_stset/
 obj_dir_prf/
 obj_dir_lq/
+obj_dir_sq/
 obj_dir_cov/
 obj_dir_cov_ooo/
 obj_dir_x/

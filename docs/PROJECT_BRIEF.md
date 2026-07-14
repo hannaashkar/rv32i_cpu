@@ -20,13 +20,13 @@ actually run on the board.
 | Domain | Result | Evidence status |
 |---|---|---|
 | Tagged CPU milestones | 1.177 → 1.397 CoreMark/MHz (**+18.8%**); IPC 0.849 → 1.008 | Reportable, CRC-validated runs at `v1.0-inorder-baseline` and `v2.0-ooo` |
-| Current D026 CPU A/B | **1.176568 → 1.422552 CoreMark/MHz (+20.91%)**; IPC 0.849 → 1.026 | Exact same 720-iteration image; two reportable runs; ~519.45M instructions lockstep-checked per core |
+| Current D027 CPU A/B | **1.176568 → 1.422552 CoreMark/MHz (+20.91%)**; IPC 0.849 → 1.026 | Exact same 720-iteration image; OoO: 506,197,207 cycles / 519,453,600 lockstep comparisons, official CRCs |
 | Latest NPU A/B | **85.99× / 93.30×** cycle-speedup on in-order / OoO; software and NPU logits bit-exact on **32/32** exported images | D025 cycle-accurate simulation + retirement lockstep |
 | Model accuracy | **97.13%** integer accuracy on all 10,000 MNIST test images | Offline integer reference; not presented as a 10,000-image RTL run |
-| Verification | 40/40 `riscv-tests` rv32ui; **99.2% RTL line coverage (1449/1461)**; 15 documented RTL/SoC integration bugs | Both cores, reproducible seeded lanes |
-| Current FPGA build | **34,798 / 49,760 LEs (70%)**, 95/182 M9Ks, 16 multipliers; **25.10 MHz Fmax**, +20.166 ns at 16.67 MHz | Quartus fitter + slow-85C STA, D026 |
+| Verification | 20/20 directed+C, 40/40 `riscv-tests` rv32ui, 25/25 base/sys/NPU random and 80/80 X/reset per core; OoO 25/25 violation stress; **99.2% RTL line coverage (1488/1500)** | Both cores, reproducible seeded lanes |
+| Current FPGA build | **34,787 / 49,760 LEs (70%)**, 95/182 M9Ks, 16 multipliers; **25.47 MHz Fmax**, +20.745 ns at 16.67 MHz | Quartus fitter + slow-85C STA, D027; all timing classes positive, zero unconstrained paths |
 | Physical hardware | In-order at **50 MHz**; OoO revision at **16.67 MHz** with M9K code and internal-flash boot | DE10-Lite hardware-confirmed with bring-up program |
-| MNIST on board | Current `.sof` built and timing-clean | First physical inference/demo still pending |
+| MNIST on board | Fresh D027 `.sof`/`.pof` built and timing-clean | First physical inference/demo still pending |
 
 ## Architecture
 
@@ -63,6 +63,21 @@ direct/shadow bypasses that reproduce write-first behavior over `OLD_DATA`
 memories. It cut the board top by 8,895 LEs, from 88% to 70%, with
 cycle-identical benchmark and lockstep behavior. See
 [PRF_SHRINK.md](PRF_SHRINK.md).
+
+### Cycle-exact SQ timing repair
+
+D027 replaced the SQ's eight-deep serial youngest-match forwarding/replay scan
+with a fixed 8→4→2→1 maximum-age tree. It preserves the exact winner,
+partial-store conflict, and older-store semantics; the original scan remains
+compiled as a live Verilator oracle. A standalone public-interface golden
+model passed 300,087 cycles and 300,088 queries, including 45,313 forwards,
+90,252 conflicts, 36,668 drains, 2,382 flushes, every mandatory coverage bin, and
+every winner leaf. Quartus kept the SQ state at 596 registers while reducing
+mapped combinational logic from 943 to 924; the fitted block is 1,024 LCs. The
+old SQ chain disappeared from every top-20 path. Slow-85C Fmax rose to 25.47
+MHz, but PLL /2 was rejected because its estimated +0.745 ns setup margin at
+25 MHz misses the project's +3 ns sign-off gate. The new measured limiter is
+ROB-head-to-IQ port-1 selection/wakeup (38.744 ns, 32 logic levels).
 
 ### Recovery stress found a non-obvious stale-uop bug
 
@@ -108,10 +123,12 @@ runs that exact image on both cores, and preserves `coremark-inorder.log` and
 `coremark-ooo.log` separately.
 
 The 2026-07-14 same-image control measured **58.828385 iterations/s** on the
-in-order core and **71.127589 iterations/s** on the D026 OoO core at the common
+in-order core and **71.127589 iterations/s** on the D027 OoO core at the common
 50 MHz reporting reference: 1.176568 versus 1.422552 CoreMark/MHz. Both runs
-printed `Correct operation validated`, matched all official 2K CRCs, and
-compared about 519.45 million retired instructions with no lockstep divergence.
+printed `Correct operation validated` and matched all official 2K CRCs. The
+OoO run completed 720 iterations in 10.122654 seconds and 506,197,207 cycles,
+with 519,453,600 lockstep comparisons and no divergence. D027 is cycle-exact
+to D026 on this benchmark.
 
 The historical +18.8% comparison belongs to the tagged milestone. At
 `v2.0-ooo`, reproduce it with `make verify-ooo && make coremark-ooo
@@ -131,14 +148,13 @@ CM_ITER=720`; the baseline method and exact run context are in
   simulation. The full-dataset 97.13% result is the offline integer model;
   the on-core comparison covers 32 exported images, and the board image embeds
   eight.
-- The latest D026 MNIST bitstream has fit/STA evidence but no physical-demo
-  evidence yet. The older OoO bring-up image proved fetch, timing, and boot on
-  silicon with the LED walker; it did not exercise NPU inference.
-- D026 raised slow-85C Fmax from 23.51 to **25.10 MHz** and removed the LQ
-  selector from every top-20 path. The new measured limiter is the load result
-  through a dependent memory AGU and the SQ's serial youngest-match
-  forwarding/replay scan into IQ load wakeup. The board remains at 16.67 MHz;
-  the ~0.17 ns theoretical margin at 25 MHz is too narrow for a PLL /2 sign-off.
+- The fresh D027 MNIST `.sof`/`.pof` has fit/STA evidence but no physical-demo
+  evidence yet. The older OoO bring-up image proved fetch, timing, and CFM boot
+  on silicon with the LED walker; it did not exercise NPU inference.
+- D026/D027 removed both LQ and SQ selector chains from every top-20 path.
+  D027 reaches **25.47 MHz** slow-85C Fmax; the new limiter is ROB-head-to-IQ
+  port-1 selection/wakeup. The board remains at 16.67 MHz because the estimated
+  +0.745 ns margin at 25 MHz is below the +3 ns PLL /2 sign-off gate.
 
 ## Evidence index
 
@@ -147,6 +163,7 @@ CM_ITER=720`; the baseline method and exact run context are in
 - Current NPU measurements and validation scope: [NPU.md](NPU.md)
 - Verification lanes and line coverage: [VERIFICATION.md](VERIFICATION.md)
 - PRF implementation and Quartus result: [PRF_SHRINK.md](PRF_SHRINK.md)
+- SQ timing rewrite and proof: [SQ_TIMING.md](SQ_TIMING.md)
 - Board acceptance state: [DEMO.md](DEMO.md)
 - Architectural decisions: [DECISIONS.md](DECISIONS.md)
 - Root-caused bugs: [BUGLOG.md](BUGLOG.md)

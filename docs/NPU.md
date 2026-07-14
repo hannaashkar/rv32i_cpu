@@ -186,8 +186,14 @@ The array maps to 16 embedded 9×9 multipliers and is integrated with both
 cores. An OoO configuration containing the NPU, M9K-resident program memory,
 PLL, and timing constraints has run on the DE10-Lite at 16.67 MHz and booted
 standalone from internal flash; that hardware proof used the LED walker, not
-NPU inference. The current D026 MNIST top—including M9K-initialized weights—
-fits at 34,798 / 49,760 LEs (70%), reaches 25.10 MHz slow-85C Fmax, and closes
-timing at 16.67 MHz with +20.166 ns setup slack. Its `.sof` is built; the first
-physical MNIST flash/demo remains pending. The speedup table above retains its
-D025 provenance because the full MLP benchmark was not rerun for D026.
+NPU inference. The current D027 MNIST top on local branch
+`codex/sq-forward-tree` (not merged or pushed)—including M9K-initialized
+weights—fits at 34,787 / 49,760 LEs (70%), uses 95 M9Ks and 16 embedded 9×9
+multiplier elements across 9 DSP blocks, reaches 25.47 MHz slow-85C Fmax, and
+closes timing at 16.67 MHz with +20.745 ns setup
+and +0.337 ns hold slack; every timing check is positive and zero paths are
+unconstrained. Fresh PLL-/3 `.sof` and `.pof` images are assembled, but they
+have not been flashed. The only hardware-confirmed OoO image remains the
+earlier 16.67 MHz LED walker/CFM build; the first physical MNIST inference is
+still pending. The **85.99× / 93.30×** speedup table above retains its D025
+provenance because the full MLP benchmark was not rerun for D026 or D027.

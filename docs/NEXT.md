@@ -2,9 +2,10 @@
 
 Last updated 2026-07-14. `main` = the MNIST-demo board top with the
 banked-M9K gshare (D024) and banked-M9K PRF (D025). The active stacked feature
-branch adds the fully verified D026 LQ timing tree + B015 fix; the freshly
-reassembled `synth/output_files/rv32i_cpu.sof` matches D026, not yet `main`.
-Everything below is the measured backlog, most-ready first.
+branch `codex/sq-forward-tree` adds the fully verified D026 LQ timing tree +
+B015 fix and D027 SQ timing tree. It is local, not pushed or merged. Fresh
+PLL-/3 `.sof` and `.pof` images have been assembled from D027. Everything
+below is the measured backlog, most-ready first.
 
 Division of labor: the standing project rule assigns microarchitecture to
 Hanna and infrastructure to Codex. On 2026-07-14 Hanna explicitly delegated
@@ -55,39 +56,47 @@ Both full lockstep gates and reportable CoreMark pass. Quartus: **Fmax 23.51
 → 25.10 MHz (+6.8%)**, LQ absent from all top-20 paths, board **34,798 LEs
 (70%)**, +20.166 ns at the current 16.67 MHz clock. Record: DECISIONS D026.
 
-## 3. SQ forward/replay selector → balanced youngest-match tree  — [Codex, current limiter]
+## 3. SQ forward/replay selector → balanced youngest-match tree  — ✅ DONE (D027, branch `codex/sq-forward-tree`, 2026-07-14)
 
-D026 STA promotes the next path cleanly. Every top-20 setup path is now:
+The 8-entry serial `m_found/m_age` reduction is now a cycle-exact parallel
+candidate stage plus fixed 8→4→2→1 maximum-age tree. The old scan remains a
+live Verilator oracle. The independent `sq-tb` golden model passes **300,087
+cycles / 300,088 queries / 45,313 forwards / 90,252 conflicts / 36,668 drains
+/ 2,382 flushes**, with mandatory coverage of occupancy 0–8, one/two/final-slot
+allocation, SB/SH/SW, multi-match selection, backpressure, flush/wrap, and
+winner leaves 0–7. INV-S1/S2/S3 cover scan equivalence plus SQ identity,
+occupancy, ordering, fill/retire/flush, and query-window invariants.
 
-`dmem M9K → load WB bypass → dependent memory AGU → SQ serial youngest-match/replay scan → IQ load wakeup`
+The result is cycle-identical on official reportable CoreMark: **1.422552
+CoreMark/MHz, IPC 1.026, 506,197,207 cycles, 519,453,600 lockstep comparisons**.
+Both cores pass 20/20 directed+C, 40/40 rv32ui, 25/25 base/system/NPU random,
+and 80/80 X-state runs; OoO also passes 25/25 violation stress. Quartus fits at
+**34,787 LEs (70%), 95 M9Ks, Fmax 25.47 MHz**, with +20.745 ns PLL-/3 setup,
++0.337 ns worst hold, every timing check positive, and zero unconstrained
+paths. SQ itself is 924 combinational / 596 registers at map and 1,024 LCs /
+596 registers after fit; no serial SQ node appears in the top 20.
 
-The worst path is 39.156 ns / 41 logic levels; Fmax is 25.10 MHz. The SQ's
-8-entry `m_found/m_age` loop has the same serial reduction shape just removed
-from the LQ, except it selects the **youngest older** matching store and also
-distinguishes full-word forwarding from partial-overlap replay.
+## 4. 2-stage pipelined issue-queue scheduler  — [Codex, current limiter]
 
-**Decision:** do the lowest-risk cycle-exact rewrite first: parallel per-entry
-age/address candidates + a fixed 8→4→2→1 maximum-age tree, preserving
-lowest-index tie behavior and `q_older` semantics. Keep the old scan as a live
-simulation oracle and add a standalone SQ lifecycle/forwarding model. Do not
-register the query or change load latency unless post-fit evidence says the
-tree is insufficient. Acceptance: both full gates, reportable CoreMark, fit +
-top-20 STA, and an actual PLL /2 slow-85C sign-off before changing the board
-clock.
+D027 promotes a clean new limiter: **all top-20 paths are now the IQ
+`rob_head → r1` selection/wakeup cone**, with a 38.744 ns worst path across 32
+logic levels. The OoO core still needs about 41.4 MHz to tie the in-order
+core's `0.849 IPC × 50 MHz`. D019 balanced the combinational select tree; the
+next meaningful wall-clock step is a true select→wakeup split. Because that
+changes scheduling latency and may change IPC, require cycle-accurate A/B
+results for CoreMark and hello, both full lockstep gates, unit-level scheduler
+checks, and full fit/top-20 STA before accepting it.
 
-## 4. 2-stage pipelined issue-queue scheduler  — [Hanna, big µarch, deferred by STA]
-
-This remains the likely deeper wall-clock project: the OoO core needs about
-41.4 MHz to tie the in-order core's `0.849 IPC × 50 MHz`. D019 balanced the
-select tree; a true select→wakeup split changes latency/IPC and needs CoreMark,
-hello, and lockstep A/B evidence. Do it after the SQ path is removed and only
-if post-change STA returns to the scheduler.
+The board remains at PLL /3 (16.67 MHz). A /2 build was deliberately not
+attempted: D027's 25.47 MHz Fmax leaves only **0.745 ns theoretical setup
+margin** at 25 MHz, below the project's ≥3 ns slow-85C sign-off gate. Revisit
+/2 only after the IQ redesign creates measured margin.
 
 ## 5. JALR target adder  — [Hanna, small µarch, deferred by STA]
 
 A dedicated rs1+imm target adder remains a clean small optimization, but JALR
-is absent from the D026 top-20 paths. Keep it queued until post-SQ STA shows the
-ALU/shifter/JALR cone again.
+is absent from the D027 top-20 paths. Keep it queued until a later STA report
+shows the ALU/shifter/JALR cone again.
 
 ## 6. IQ payload split  — [Hanna, medium µarch]
 
@@ -99,6 +108,10 @@ de-risks task #4 (less state to pipeline). Evidence: audit §1.
 
 ## 7. Small infra / cleanups  — [Codex, do anytime]
 
+- **Regenerate the portfolio book before sharing it.** The ignored local
+  `docs/book/rv32i_soc_book.{html,pdf}` still contains pre-D024/D025/D027 area,
+  NPU, and lockstep numbers. Rebuild it from the tracked evidence ledger (or
+  label/remove the stale copy); never send the current local PDF to recruiters.
 - **Portable setup/tool discovery** — the wrapper is excellent on Hanna's
   machine, but Makefile defaults still embed local xPack/Python/Quartus paths.
   Add `docs/SETUP.md`, PATH-first discovery, explicit override examples, and a
@@ -118,7 +131,7 @@ de-risks task #4 (less state to pipeline). Evidence: audit §1.
 - **System/decode-tail coverage — DONE 2026-07-14.** Directed
   `sys_nops.S` + additive `--sys` random lane; both cores 20/20 directed
   and 25/25 system-random, 1,148 injected words/core, zero divergence.
-  Coverage is now 99.2% (1449/1461 on D026); established seed streams unchanged.
+  Coverage is now 99.2% (1488/1500 on D027); established seed streams unchanged.
 - **NPU-region random mode — DONE 2026-07-14.** Additive `--npu` bursts
   exercise back-to-back GO, staging/readback ordering, busy-time immediate
   address/data dependencies, STATUS/ID/unmapped reads. Both cores 25/25;
@@ -138,8 +151,11 @@ de-risks task #4 (less state to pipeline). Evidence: audit §1.
 - `main` = `ab79b50` = D024 + D025 merged and pushed.
 - `codex/verif-hardening` = verification/evidence batch commits `533aaa4` +
   `15f6d98` (local, not pushed).
-- `codex/lq-balanced-tree` = D026 + B015 local branch; full sim, fit, STA,
-  and assembler green; merge/push still pending.
+- `codex/lq-balanced-tree` = D026 + B015 committed locally; full sim, fit, STA,
+  and assembler green.
+- `codex/sq-forward-tree` = D027 stacked on D026; full sim, reportable
+  CoreMark, coverage, fit, STA, `.sof`, and `.pof` green. Local only: not
+  pushed or merged.
 - Feature branches `mlp-board-demo`, `gshare-m9k-pht` pushed (now folded
   into main; safe to delete locally once you're comfortable).
 - Env: the old build landmines are guarded in the Makefile — `make` just

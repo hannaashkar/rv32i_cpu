@@ -6,14 +6,28 @@ store-set policy, and D026 for the cycle-exact balanced violation selector.
 BUGLOG B013 records the recovery-flush defect; B015 records the final-slot
 slot1-only allocation defect found by D026's new standalone unit model.
 
-Current D026 evidence: `lq-tb` passed 250,026 directed+random cycles; both
-cores passed 20/20 directed+C, 40/40 rv32ui, 25/25 base, 25/25 system-tail,
-25/25 NPU/MMIO, and 80/80 randomized-reset runs; OoO additionally passed
-25/25 `--vio`, all lockstep-clean. The serial violation select was replaced
-by a fixed 8→4→2→1 minimum-age tree with a simulation-only serial oracle.
-Board-top Fmax improved **23.51 → 25.10 MHz (+6.8%)**, and the LQ is absent
-from every new top-20 timing path. The next limiter is the SQ's serial
-youngest-older forwarding/replay selector.
+D026's LQ evidence remains: `lq-tb` passed 250,026 directed+random cycles,
+and the serial violation select was replaced by a fixed 8→4→2→1 minimum-age
+tree with a simulation-only serial oracle. That change improved board-top
+Fmax **23.51 → 25.10 MHz (+6.8%)** and removed the LQ from every top-20 path.
+
+Current D027 system evidence on local branch `codex/sq-forward-tree` (not
+merged or pushed) adds a cycle-exact balanced SQ selector and a 300,087-cycle
+standalone `sq-tb`. Both cores pass 20/20 directed+C, 40/40
+rv32ui, 25/25 base, 25/25 system-tail, 25/25 NPU/MMIO, and 80/80 randomized-
+reset runs; OoO additionally passes 25/25 `--vio`, all lockstep-clean. Line
+coverage is **99.2% (1488/1500)**. Reportable CoreMark remains cycle-identical
+to D026 at **1.422552 CoreMark/MHz, IPC 1.026, 506,197,207 cycles, and
+519,453,600 retired instructions lockstep-checked**. The D027 board top fits
+at **34,787 LEs (70%)**, 95 M9Ks, and 16 embedded 9×9 multiplier elements
+(9 DSP blocks); slow-85C Fmax is **25.47 MHz**,
+with +20.745 ns setup and +0.337 ns hold slack at PLL /3, every timing check
+positive, and zero unconstrained paths. The LQ and SQ are absent from all
+top-20 paths. The new measured limiter is the issue queue's `rob_head`→`r1`
+path (38.744 ns,
+32 logic levels), so SQ/LQ work is no longer the next timing target. PLL /2
+was rejected: its 0.745 ns theoretical setup margin misses the 3 ns signoff
+gate.
 
 Historical D020 characterization remains useful: CoreMark (rare violations)
 was **1.026** speculative vs **1.006** conservative IPC (+2.0%), while hello.c

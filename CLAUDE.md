@@ -588,7 +588,7 @@ NEXT.md Task 1 DONE — the audit's second (and last big) LE pig is gone.**
   `make verify[-ooo]` now includes this lane.
 - Re-measured `make coverage`: **99.2% RTL line coverage (1428/1440), 60
   programs/core**. The former decode tail is closed on both cores; the 12
-  remaining lines are documented defensive/configuration paths. Main was
+  remaining lines are documented defensive/configuration and board-MMIO paths. Main was
   already merged/pushed through D025 at `ab79b50`; this verification batch
   lives on feature branch `codex/verif-hardening`.
 - Re-ran `quartus_asm` against the D025 fitted database: **0 errors / 0
@@ -661,19 +661,50 @@ pushed):**
   forwarding/partial-overlap replay selector. Keep PLL /3: /2 has only
   ~0.17 ns theoretical margin before the SQ change.
 
+**2026-07-14 (later night) — D027 SQ forwarding/replay selector timing
+rewrite (branch `codex/sq-forward-tree`, stacked on D026; LOCAL, NOT merged or
+pushed):**
+- Replaced the SQ's 8-entry serial youngest-older forwarding/partial-overlap
+  replay scan with a fixed **8→4→2→1 balanced maximum-age tree**. The visible
+  contract is cycle-exact: strict older-than filtering, youngest matching
+  store, same-word SW forwarding, partial-store conflict/replay, lower
+  physical index on a defensive equal-age tie, and zero data on no hit. The
+  original serial scan remains as a `VERILATOR`-only every-cycle oracle.
+- New standalone public-interface golden-model `sq-tb` covers directed
+  occupancy/wrap/flush/fill/drain/backpressure cases and 300,000 legal random
+  cycles: **300,087 total cycles PASS**. Full gates remain green: both cores
+  **20/20 + 40/40 + 25/25 base + 25/25 system + 25/25 NPU + 80/80 X/reset**,
+  plus OoO **25/25 `--vio`**, all lockstep-clean. Fresh line coverage is
+  **99.2% (1488/1500)**.
+- Reportable 720-iteration CoreMark is cycle-identical to D026:
+  **1.422552 CoreMark/MHz, IPC 1.026, 506,197,207 cycles**, official CRCs, and
+  **519,453,600 retired instructions lockstep-checked**. The timing rewrite
+  therefore changes neither architectural behavior nor benchmark latency.
+- Full board fit/STA: **34,787/49,760 LEs (70%)**, 95 M9Ks, 16 embedded 9×9
+  multiplier elements across 9 DSP blocks; slow-85C
+  Fmax **25.47 MHz**, setup slack +20.745 ns at the shipping 16.67 MHz PLL /3,
+  hold +0.337 ns, every timing check positive, zero unconstrained paths. The
+  SQ is absent from all top-20 paths. The new limiter is the issue queue's
+  `rob_head`→`r1` path (**38.744 ns / 32 logic levels**). PLL /2 was rejected:
+  its 0.745 ns theoretical margin does not meet the 3 ns signoff gate.
+- Fresh PLL-/3 `.sof` and `.pof` images were assembled successfully but have
+  **not** been flashed. Hardware truth remains the earlier OoO LED walker/CFM
+  image at 16.67 MHz; physical MNIST inference is still pending.
+
 **Next → see `docs/NEXT.md` (the start-here backlog).** In brief:
 (0) **Flash the MNIST demo** — `.sof` is built; DEFERRED by Hanna
 2026-07-12, it's her hardware step (USB-Blaster → digit demo → video).
 Do NOT auto-do. (1) ~~PRF→M9K LVT~~ **DONE + merged (D025, `ab79b50`,
 −8,895 LEs → 70%, IPC-neutral).** (2) ~~LQ timing tree~~ **DONE D026;
-not yet merged.** (3) **SQ forwarding/replay selector** — exact balanced
-youngest-older tree + serial oracle + standalone unit model; current STA proves
-it is now the first limiter. (4) 2-stage scheduler only after post-SQ STA.
-(5) JALR target adder only if it
-returns to the measured paths. (6) IQ payload split (~3k LEs). (7) Small infra: NPU on-board error
-patterns, `make -j` suites, loop/call-tree/RAS random coverage,
-INV-G2 negative self-test. **Env note:** the two old build landmines are
+stacked locally.** (3) ~~SQ forwarding/replay tree~~ **DONE D027; cycle-exact,
+full-gate green, PLL /3 retained, local/not merged or pushed.** (4) **Issue
+queue timing** — current measured limiter is `rob_head`→`r1`; choose the next
+scheduler change from post-D027 evidence before touching RTL. (5) JALR target
+adder only if it returns to the measured paths. (6) IQ payload split (~3k
+LEs). (7) Small infra: NPU on-board error patterns, `make -j` suites,
+loop/call-tree/RAS random coverage, INV-G2 negative self-test. **Env note:**
+the two old build landmines are
 GUARDED IN THE MAKEFILE — `make` just works; if overriding, VERILATOR_ROOT
-must be `/ucrt64/share/verilator` (mount form). D024/D025 are merged; D026 is
-local on `codex/lq-balanced-tree`;
+must be `/ucrt64/share/verilator` (mount form). D024/D025 are merged;
+D026+D027 are stacked locally on `codex/sq-forward-tree`;
 physical flashing remains Hanna's deferred hardware step.

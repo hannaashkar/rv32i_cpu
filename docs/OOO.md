@@ -11,6 +11,14 @@
 > **docs/DECISIONS.md**. Statements below about "no LQ" are the
 > historical D013 simplification, kept for the record.
 
+> **Current implementation note (D027).** The eight-entry SQ still obeys the
+> D013 architectural contract, but its youngest-older forwarding/replay query
+> is now a cycle-exact fixed 8→4→2→1 reduction tree with the original serial
+> scan retained as a live Verilator oracle. The independent lifecycle model,
+> invariants, exact selection rules, and routed timing result are documented in
+> **[SQ_TIMING.md](SQ_TIMING.md)**. This is an implementation optimization—no
+> SQ state, load latency, ordering rule, or IPC changed.
+
 ## Measured result (2026-07-03, same binary as the baseline)
 
 | Metric | in-order (v1.0 tag) | **ooo_cpu** | delta |

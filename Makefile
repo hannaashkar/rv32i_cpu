@@ -245,6 +245,24 @@ lq-tb: $(LQ_TB)
 	./$(LQ_TB)
 .PHONY: lq-tb
 
+# --- store-queue unit testbench (forward/replay selector, D027) ---------------
+# Public-interface lifecycle model: ring pointers, fill, commit/drain, flush,
+# forwarding/conflict, and strong-order q_older semantics.
+SQ_TB := obj_dir_sq/Vooo_sq
+
+$(SQ_TB): Makefile rtl/ooo/ooo_sq.v rtl/ooo/ooo_pkg.vh \
+          tb/verilator/sq_tb.cpp
+	@$(CHECK_VROOT)
+	$(VERILATOR) --cc --exe --build -j 0 --top-module ooo_sq \
+	    --Mdir obj_dir_sq -Wno-fatal -Irtl/ooo \
+	    -MAKEFLAGS OPT_FAST=-O2 -MAKEFLAGS OPT_SLOW=-O2 \
+	    -MAKEFLAGS OPT_GLOBAL=-O2 -MAKEFLAGS VM_PARALLEL_BUILDS=1 \
+	    rtl/ooo/ooo_sq.v tb/verilator/sq_tb.cpp -o Vooo_sq
+
+sq-tb: $(SQ_TB)
+	./$(SQ_TB)
+.PHONY: sq-tb
+
 # --- software build ------------------------------------------------------------
 sw: $(SW_TESTS)
 
@@ -679,7 +697,7 @@ coremark-ooo:
 	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO) CM_ITER=$(CM_ITER)
 coremark-quick-ooo:
 	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO) CM_ITER=10 CM_REQUIRE_REPORT=0
-verify-ooo: lq-tb regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo
+verify-ooo: lq-tb sq-tb regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo
 .PHONY: sim-ooo regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo \
 	    coremark-ooo coremark-quick-ooo verify-ooo
 
@@ -721,7 +739,7 @@ synth-sta:
 .PHONY: synth-fit synth-sta
 
 clean:
-	rm -rf obj_dir obj_dir_ooo obj_dir_x obj_dir_x_ooo obj_dir_npu obj_dir_stset obj_dir_prf obj_dir_lq sim.fst
+	rm -rf obj_dir obj_dir_ooo obj_dir_x obj_dir_x_ooo obj_dir_npu obj_dir_stset obj_dir_prf obj_dir_lq obj_dir_sq sim.fst
 	rm -f sw/tests/*.elf sw/tests/*.bin sw/tests/*.hex
 	rm -f sw/ctests/*.elf sw/ctests/*.bin sw/ctests/*.hex
 	rm -f sw/coremark/coremark.elf sw/coremark/*.bin sw/coremark/*.hex
