@@ -1,14 +1,26 @@
 # Speculative Loads + Load Queue (LQ) — design spec
 
-Status: **IMPLEMENTED + verified + measured** (2026-07-08). See DECISIONS.md
-**D020** for the results and BUGLOG **B013** for the one bug found (IQ not
-cleared on the violation flush). Correctness: OoO 14/14 + 40/40 riscv-tests
-(incl. `ld_st`) + 25/25 random + 25/25 `--vio` stress (1185 violations), all
-lockstep-clean. IPC: **violation-frequency-dependent** — CoreMark (rare)
-**1.026** spec vs **1.006** cons (+2.0%), but hello.c (15 stack-spill
-violations) is −36% because the flush-at-head recovery is a ~46-cyc drain (open
-Hanna call — see D020: keep on / default off / add a store-set predictor). Fmax:
-**26.32 MHz** slow-85C (LQ CAM did not erode the D019 wall).
+Status: **IMPLEMENTED, policy-tuned, and timing-optimized** (D020/D021/D026).
+See DECISIONS.md D020 for speculative-load recovery, D021 for the shipping
+store-set policy, and D026 for the cycle-exact balanced violation selector.
+BUGLOG B013 records the recovery-flush defect; B015 records the final-slot
+slot1-only allocation defect found by D026's new standalone unit model.
+
+Current D026 evidence: `lq-tb` passed 250,026 directed+random cycles; both
+cores passed 20/20 directed+C, 40/40 rv32ui, 25/25 base, 25/25 system-tail,
+25/25 NPU/MMIO, and 80/80 randomized-reset runs; OoO additionally passed
+25/25 `--vio`, all lockstep-clean. The serial violation select was replaced
+by a fixed 8→4→2→1 minimum-age tree with a simulation-only serial oracle.
+Board-top Fmax improved **23.51 → 25.10 MHz (+6.8%)**, and the LQ is absent
+from every new top-20 timing path. The next limiter is the SQ's serial
+youngest-older forwarding/replay selector.
+
+Historical D020 characterization remains useful: CoreMark (rare violations)
+was **1.026** speculative vs **1.006** conservative IPC (+2.0%), while hello.c
+(15 stack-spill violations) regressed 36% because flush-at-head recovery costs
+~46 cycles. D021's store-set predictor resolved that policy call. D020's
+**26.32 MHz** figure was a bare-core characterization on a different fit; it
+is not the current board-top Fmax.
 Owner decisions (Hanna): LQ depth = **8**; recovery = **poison + flush at ROB
 head** (Strategy B). Derived from a 3-way adversarial design analysis
 (structure / recovery / ISS-lockstep).

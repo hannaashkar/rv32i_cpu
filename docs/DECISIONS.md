@@ -5,6 +5,72 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D026 — 2026-07-14 — LQ violation selector → balanced 8→4→2→1 tree; Fmax 23.51 → 25.10 MHz, LQ leaves the top-20 paths
+
+**Decision:** replace only the 8-entry LQ violation CAM's source-ordered
+minimum-age accumulation with a fixed three-level reduction tree. Hanna
+explicitly delegated architectural decisions for this phase; the selection
+was evidence-driven because every D025 top-20 path crossed the old serial
+`m_found/m_age` chain. Two alternatives were rejected for this increment:
+
+1. Registering the store-fill/CAM request offered a larger timing cut but
+   introduced delayed-poison correctness around branch restore, ROB-tag reuse,
+   and flush-at-head recovery.
+2. Compiling out speculative-load recovery for an FPGA profile would trade
+   away roughly 2% CoreMark IPC and make simulation and board policies differ.
+
+**Exact contract:** all eight match predicates are formed in parallel. Each
+candidate is `{match, tag-head, tag}`; a fixed 8→4→2→1 `oldest_of_two` tree
+selects the smallest unsigned 6-bit modular age, with the lower LQ index
+winning an equal-age tie exactly like the old 0→7 scan. No hit still drives
+`vio_tag=0`. There is no new register, recovery state, or pipeline latency.
+The old scan remains under `VERILATOR` as an independent cycle-by-cycle
+equivalence oracle (INV-L1); unique live tags and allocation capacity are
+also asserted (INV-L2/L3). A public-interface C++ model independently checks
+the full allocation/execute/retire/flush lifecycle and selector.
+
+**Correctness bug found on the way:** the new unit-test review exposed B015:
+a slot1-only load used `free1` even when slot0 was not a load. At LQ occupancy
+seven it dispatched without allocating an entry, so a later violation could
+be missed. Allocation is now packed (`free0` for slot1-only, `free1` for the
+second load), including the same-edge branch-flush kill. See BUGLOG B015.
+
+**Verification:** `make lq-tb` passes **250,026 cycles**, 218,731 store
+probes, and 55,318 matches including modular wrap, multi-hit oldest selection,
+byte-mask overlap, physical-index/age disagreement, pre-edge semantics, and
+the B015 occupancy-seven reproducer. Final full gates are green on both cores:
+20/20 directed+C, 40/40 rv32ui, 25/25 base random, 25/25 system-tail random,
+25/25 NPU-ordering random, and 80/80 randomized-reset runs; OoO additionally
+passes 25/25 violation stress. All are retirement-lockstep clean, with the
+tree-vs-scan oracle live in every OoO run.
+
+**Performance:** reportable 720-iteration CoreMark remains **IPC 1.026** and
+passes the official CRC/duration gate: 71.127589 iterations/s,
+506,197,207 cycles, and 519,453,600 lockstep comparisons. Versus the D025
+same-image run, throughput changes by only −0.0006%; that tiny nonzero delta
+comes from B015 correctly consuming the final LQ slot in rare slot1-only
+groups, not from the combinational tree.
+
+**Quartus result (MAX 10 slow-85C, same board project/default seed):**
+
+- Fmax **23.51 → 25.10 MHz (+6.8%)**; current 16.67 MHz PLL /3 setup slack
+  is **+20.166 ns**, hold +0.307 ns, and all paths are constrained.
+- The LQ is absent from every top-20 path. Its map cost is 746 combinational
+  ALUTs / 336 registers versus 725 / 336 before (+21 ALUTs, no state); fitted
+  LQ cost is 853 LCs / 336 registers versus 840 / 336.
+- Whole board top: **34,798 / 49,760 LEs (70%)**, 95/182 M9Ks, 16 multiplier
+  elements. This is +84 fitted LEs (+0.24% of the device) versus D025.
+- New limiter: dmem load result → dependent memory AGU → the **SQ's serial
+  youngest-matching-store forward/replay scan** → IQ load wakeup, 39.156 ns /
+  41 logic levels. The old LQ/`rob_poison` cone has been successfully retired.
+
+**Clock call:** keep the shipping board at **16.67 MHz** for now. Fmax 25.10
+leaves only about 0.17 ns theoretical setup margin at an exact 25 MHz PLL /2,
+which is not production-quality headroom. Balance the now-measured SQ selector,
+refit, and sign off the actual /2 configuration only if slow-85C margin is
+comfortably positive. The D026 `.sof` was reassembled successfully (0 errors,
+0 warnings); physical MNIST flashing remains a separate acceptance step.
+
 ## D025 — 2026-07-12 — PRF → 18 banked M9K blocks via an LVT (branch `prf-m9k-lvt`); board top 88% → 70% LEs (−8,895), IPC-neutral
 
 **Context:** the 2026-07-11 audit's per-entity fit table named `ooo_prf` =

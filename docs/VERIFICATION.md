@@ -1,6 +1,7 @@
 # Verification strategy
 
-The verification stack has eight verification lanes, all of them
+The verification stack combines independent unit tests with eight system-level
+verification lanes, all of them
 checked by the same **golden-model lockstep co-simulation** — so every
 test contributes checking at every retired instruction, not just at its
 final CHECK.
@@ -31,6 +32,7 @@ modeled exactly; a quirk is architecture once documented.
 
 | Layer | Command | What it adds |
 |---|---|---|
+| LQ golden-model unit (OoO only) | `make lq-tb` | Directed lifecycle/age/wrap/pre-edge cases plus 250,000 random cycles against an independent C++ model; includes the B015 one-free-slot allocation reproducer and checks the D026 tree against the original serial selector every cycle |
 | Directed suites (`sw/tests/*.S`, `sw/ctests/*.c`) | `make regress` | Targeted corner cases: hazards found as real bugs (B004/B007/B008 regressions), BTB-stale returns, sub-word lanes, CSR semantics, exact instret deltas, the C runtime |
 | Third-party integer tests (`riscv-tests` rv32ui, vendored) | `make regress-isa` | 40/40 integer-instruction acceptance tests; this is not a privileged/trap compliance claim |
 | Constrained-random (`scripts/gen_random_test.py`) | `make regress-rand` | 25 seeds × 3000 instructions of weighted-random mix incl. misaligned accesses and dense hazards; forward-only control flow guarantees termination; reproducible by seed |
@@ -41,17 +43,17 @@ modeled exactly; a quirk is architecture once documented.
 | Benchmark | `make coremark` | 433M-instruction real-workload run, CRC-validated AND lockstep-checked |
 
 `make verify` = regress + regress-isa + regress-rand + regress-rand-sys +
-regress-rand-npu + regress-x. `make verify-ooo` adds `regress-rand-vio`
-(the LQ recovery path) and runs the OoO X-state model. All green is the
-merge gate for `main`.
+regress-rand-npu + regress-x. `make verify-ooo` additionally requires
+`lq-tb`, adds `regress-rand-vio` (the LQ recovery path), and runs the OoO
+X-state model. All green is the merge gate for `main`.
 
-## Coverage (measured 2026-07-14)
+## Coverage (measured 2026-07-14 on D026)
 
 `make coverage` builds line-coverage-instrumented models of BOTH cores,
 runs the directed + C + ISA suites on each (60 programs per core),
 merges the per-test data, and prints the combined figure. Current:
 
-- **RTL line coverage: 99.2% (1428/1440 lines)**, both cores combined.
+- **RTL line coverage: 99.2% (1449/1461 lines)**, both cores combined.
 - Merged lcov data lands in `build/cov/coverage.info` for annotation.
 - The former decode tail is closed: `sw/tests/sys_nops.S` proves exact
   retirement plus no register/CSR/memory side effects, and the 25-seed
@@ -95,5 +97,5 @@ models and benchmark cycle counts are untouched.
 
 Every real RTL/SoC integration bug found is recorded in
 [BUGLOG.md](BUGLOG.md) with symptom, root cause, how it was caught, and the
-fix (**B001–B014**, 14 unique bugs). Several exist as permanent directed,
+fix (**B001–B015**, 15 unique bugs). Several exist as permanent directed,
 random, assertion, or recovery-stress regressions rather than anecdotes.

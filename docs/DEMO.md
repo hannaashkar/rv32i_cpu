@@ -5,9 +5,10 @@ LED walker are hardware-proven (2026-07-11); the MNIST demo is
 lockstep-verified in simulation on both cores — its first board flash is
 the acceptance step. **The MNIST bitstream now builds** — D024 first made
 the design routable by moving the gshare PHT into M9Ks; D025 then moved the
-6R/3W PRF into 18 M9Ks. The current top fits at **34,714 / 49,760 LEs
-(70%)** and closes timing at 16.67 MHz with **+17.47 ns** setup slack;
-`output_files/rv32i_cpu.sof` was reassembled from the D025 fit on 2026-07-14
+6R/3W PRF into 18 M9Ks, and D026 balanced the LQ violation selector. The
+current top fits at **34,798 / 49,760 LEs (70%)**, reaches **25.10 MHz**
+slow-85C Fmax, and closes timing at 16.67 MHz with **+20.166 ns** setup slack;
+`output_files/rv32i_cpu.sof` was reassembled from the D026 fit on 2026-07-14
 and is ready to flash. (Before D024 it failed to
 route at 96% LEs — if you are on an older checkout and hit "Can't route",
 that is why.) If anything surprises you, the board state section at the

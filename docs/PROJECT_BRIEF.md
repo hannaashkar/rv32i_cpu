@@ -20,11 +20,11 @@ actually run on the board.
 | Domain | Result | Evidence status |
 |---|---|---|
 | Tagged CPU milestones | 1.177 → 1.397 CoreMark/MHz (**+18.8%**); IPC 0.849 → 1.008 | Reportable, CRC-validated runs at `v1.0-inorder-baseline` and `v2.0-ooo` |
-| Current D025 CPU A/B | **1.176568 → 1.422560 CoreMark/MHz (+20.91%)**; IPC 0.849 → 1.026 | Exact same 720-iteration image; two reportable runs; ~519.45M instructions lockstep-checked per core |
-| Current NPU run | **85.99× / 93.30×** cycle-speedup on in-order / OoO; software and NPU logits bit-exact on **32/32** exported images | Cycle-accurate simulation + retirement lockstep |
+| Current D026 CPU A/B | **1.176568 → 1.422552 CoreMark/MHz (+20.91%)**; IPC 0.849 → 1.026 | Exact same 720-iteration image; two reportable runs; ~519.45M instructions lockstep-checked per core |
+| Latest NPU A/B | **85.99× / 93.30×** cycle-speedup on in-order / OoO; software and NPU logits bit-exact on **32/32** exported images | D025 cycle-accurate simulation + retirement lockstep |
 | Model accuracy | **97.13%** integer accuracy on all 10,000 MNIST test images | Offline integer reference; not presented as a 10,000-image RTL run |
-| Verification | 40/40 `riscv-tests` rv32ui; **99.2% RTL line coverage (1428/1440)**; 14 documented RTL/SoC integration bugs | Both cores, reproducible seeded lanes |
-| Current FPGA build | **34,714 / 49,760 LEs (70%)**, 95/182 M9Ks, 16 multipliers; +17.47 ns setup slack at 16.67 MHz | Quartus fitter + slow-85C STA, D025 |
+| Verification | 40/40 `riscv-tests` rv32ui; **99.2% RTL line coverage (1449/1461)**; 15 documented RTL/SoC integration bugs | Both cores, reproducible seeded lanes |
+| Current FPGA build | **34,798 / 49,760 LEs (70%)**, 95/182 M9Ks, 16 multipliers; **25.10 MHz Fmax**, +20.166 ns at 16.67 MHz | Quartus fitter + slow-85C STA, D026 |
 | Physical hardware | In-order at **50 MHz**; OoO revision at **16.67 MHz** with M9K code and internal-flash boot | DE10-Lite hardware-confirmed with bring-up program |
 | MNIST on board | Current `.sof` built and timing-clean | First physical inference/demo still pending |
 
@@ -108,8 +108,8 @@ runs that exact image on both cores, and preserves `coremark-inorder.log` and
 `coremark-ooo.log` separately.
 
 The 2026-07-14 same-image control measured **58.828385 iterations/s** on the
-in-order core and **71.127993 iterations/s** on the OoO core at the common
-50 MHz reporting reference: 1.176568 versus 1.422560 CoreMark/MHz. Both runs
+in-order core and **71.127589 iterations/s** on the D026 OoO core at the common
+50 MHz reporting reference: 1.176568 versus 1.422552 CoreMark/MHz. Both runs
 printed `Correct operation validated`, matched all official 2K CRCs, and
 compared about 519.45 million retired instructions with no lockstep divergence.
 
@@ -131,13 +131,14 @@ CM_ITER=720`; the baseline method and exact run context are in
   simulation. The full-dataset 97.13% result is the offline integer model;
   the on-core comparison covers 32 exported images, and the board image embeds
   eight.
-- The latest D025 MNIST bitstream has fit/STA evidence but no physical-demo
+- The latest D026 MNIST bitstream has fit/STA evidence but no physical-demo
   evidence yet. The older OoO bring-up image proved fetch, timing, and boot on
   silicon with the LED walker; it did not exercise NPU inference.
-- Current D025 STA is 23.51 MHz-capable, and all top-20 paths run through the
-  load result/store AGU/LQ violation CAM into `rob_poison`. The next timing
-  change must address that measured path before revisiting the scheduler or
-  JALR logic.
+- D026 raised slow-85C Fmax from 23.51 to **25.10 MHz** and removed the LQ
+  selector from every top-20 path. The new measured limiter is the load result
+  through a dependent memory AGU and the SQ's serial youngest-match
+  forwarding/replay scan into IQ load wakeup. The board remains at 16.67 MHz;
+  the ~0.17 ns theoretical margin at 25 MHz is too narrow for a PLL /2 sign-off.
 
 ## Evidence index
 

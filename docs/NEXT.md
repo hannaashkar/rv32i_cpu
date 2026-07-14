@@ -1,16 +1,17 @@
 # Next tasks — start here
 
 Last updated 2026-07-14. `main` = the MNIST-demo board top with the
-banked-M9K gshare (D024) and banked-M9K PRF (D025); both cores verified
-green. `synth/output_files/rv32i_cpu.sof` was reassembled successfully on
-2026-07-14 and matches D025/current `main`. Everything below is the agreed
-backlog, most-ready first.
+banked-M9K gshare (D024) and banked-M9K PRF (D025). The active stacked feature
+branch adds the fully verified D026 LQ timing tree + B015 fix; the freshly
+reassembled `synth/output_files/rv32i_cpu.sof` matches D026, not yet `main`.
+Everything below is the measured backlog, most-ready first.
 
-Division of labor (project rule): **Hanna owns microarchitecture
-decisions** — for those, Claude presents 2–3 options with tradeoffs and
-waits. **Claude owns infrastructure** (Makefiles, TB, scripts, docs) and
-can just do it. Owner tagged per task. Deeper evidence for the RTL levers
-is in `docs/AUDIT-2026-07-11.md` §1/§6 and `docs/GSHARE_SHRINK.md`.
+Division of labor: the standing project rule assigns microarchitecture to
+Hanna and infrastructure to Codex. On 2026-07-14 Hanna explicitly delegated
+architectural decisions for the current performance/portfolio push, so Codex
+may select and implement the evidence-backed option until that delegation is
+revoked. Deeper evidence for the RTL levers is in
+`docs/AUDIT-2026-07-11.md` §1/§6.
 
 ---
 
@@ -44,57 +45,59 @@ delegated → Option A). **Board top 43,609 → 34,714 LEs (88% → 70%,
 0 defects). Record: DECISIONS.md D025. **Merged to `main` and pushed as
 `ab79b50`** (the estimate was ~9–10k LEs; delivered −8,895, on the nose).
 
-## 2. LQ violation-path timing redesign  — [Hanna, µarch decision]  ← current limiter
+## 2. LQ violation-path timing redesign  — ✅ DONE (D026, branch `codex/lq-balanced-tree`, 2026-07-14)
 
-D025 STA changed the priority. The current Fmax report is **23.51 MHz**, and
-all top-20 setup paths are the same ~41.9 ns / 36-level chain:
+Selected the cycle-exact parallel match + balanced 8→4→2→1 age tree.
+INV-L1 keeps the old scan as a Verilator oracle; a new standalone golden model
+passes 250,026 cycles / 218,731 probes / 55,318 matches. It also found and
+fixed **B015**, a real slot1-only-load allocation hole at LQ occupancy seven.
+Both full lockstep gates and reportable CoreMark pass. Quartus: **Fmax 23.51
+→ 25.10 MHz (+6.8%)**, LQ absent from all top-20 paths, board **34,798 LEs
+(70%)**, +20.166 ns at the current 16.67 MHz clock. Record: DECISIONS D026.
 
-`dmem M9K → load WB bypass → dependent-store AGU → LQ oldest-match select → rob_poison`
+## 3. SQ forward/replay selector → balanced youngest-match tree  — [Codex, current limiter]
 
-Neither the issue scheduler nor JALR appears in the top 20, so changing either
-first is not evidence-based. Choose one option before RTL:
+D026 STA promotes the next path cleanly. Every top-20 setup path is now:
 
-1. **Parallel match + balanced age tree (recommended first).** Replace the
-   serial `m_found/m_age` loop with a bit/cycle-exact balanced reduction, using
-   the successful D019 IQ-tree pattern. Lowest recovery risk; modest logic
-   rewrite; expected to shorten the current combinational chain without an IPC
-   change.
-2. **Register the store-fill/CAM request.** Breaks the AGU→CAM path most
-   decisively, but delayed poisoning must prove branch-squash, ROB-tag reuse,
-   same-cycle recovery, and precise exception ordering. Highest timing upside
-   and highest verification/architectural complexity.
-3. **Conservative FPGA profile.** Compile out speculative-load recovery for a
-   board SKU (setting `LOAD_POLICY=0` alone is insufficient because the LQ
-   hardware remains). Lowest implementation risk and a useful PPA control, but
-   gives up roughly 2% CoreMark IPC and makes simulation/FPGA policies differ.
+`dmem M9K → load WB bypass → dependent memory AGU → SQ serial youngest-match/replay scan → IQ load wakeup`
 
-After the chosen change: unit-test the selector if applicable, run both full
-lockstep gates plus policy A/B benchmarks, rerun fit/STA, and only then promote
-the next measured limiter.
+The worst path is 39.156 ns / 41 logic levels; Fmax is 25.10 MHz. The SQ's
+8-entry `m_found/m_age` loop has the same serial reduction shape just removed
+from the LQ, except it selects the **youngest older** matching store and also
+distinguishes full-word forwarding from partial-overlap replay.
 
-## 3. 2-stage pipelined issue-queue scheduler  — [Hanna, big µarch, deferred by STA]
+**Decision:** do the lowest-risk cycle-exact rewrite first: parallel per-entry
+age/address candidates + a fixed 8→4→2→1 maximum-age tree, preserving
+lowest-index tie behavior and `q_older` semantics. Keep the old scan as a live
+simulation oracle and add a standalone SQ lifecycle/forwarding model. Do not
+register the query or change load latency unless post-fit evidence says the
+tree is insufficient. Acceptance: both full gates, reportable CoreMark, fit +
+top-20 STA, and an actual PLL /2 slow-85C sign-off before changing the board
+clock.
+
+## 4. 2-stage pipelined issue-queue scheduler  — [Hanna, big µarch, deferred by STA]
 
 This remains the likely deeper wall-clock project: the OoO core needs about
 41.4 MHz to tie the in-order core's `0.849 IPC × 50 MHz`. D019 balanced the
 select tree; a true select→wakeup split changes latency/IPC and needs CoreMark,
-hello, and lockstep A/B evidence. Do it after the LQ path is removed and only
+hello, and lockstep A/B evidence. Do it after the SQ path is removed and only
 if post-change STA returns to the scheduler.
 
-## 4. JALR target adder  — [Hanna, small µarch, deferred by STA]
+## 5. JALR target adder  — [Hanna, small µarch, deferred by STA]
 
 A dedicated rs1+imm target adder remains a clean small optimization, but JALR
-is absent from the D025 top-20 paths. Keep it queued until post-LQ STA shows the
+is absent from the D026 top-20 paths. Keep it queued until post-SQ STA shows the
 ALU/shifter/JALR cone again.
 
-## 5. IQ payload split  — [Hanna, medium µarch]
+## 6. IQ payload split  — [Hanna, medium µarch]
 
 Split the 162-bit IQ uop into a scheduling-bits array + a payload RAM
 (~111 of the 162 bits are never read by scheduling logic). ~3k LEs, and it
-de-risks task #3 (less state to pipeline). Evidence: audit §1.
+de-risks task #4 (less state to pipeline). Evidence: audit §1.
 
 ---
 
-## 6. Small infra / cleanups  — [Claude, do anytime]
+## 7. Small infra / cleanups  — [Codex, do anytime]
 
 - **Portable setup/tool discovery** — the wrapper is excellent on Hanna's
   machine, but Makefile defaults still embed local xPack/Python/Quartus paths.
@@ -115,7 +118,7 @@ de-risks task #3 (less state to pipeline). Evidence: audit §1.
 - **System/decode-tail coverage — DONE 2026-07-14.** Directed
   `sys_nops.S` + additive `--sys` random lane; both cores 20/20 directed
   and 25/25 system-random, 1,148 injected words/core, zero divergence.
-  Coverage is now 99.2% (1428/1440); established seed streams unchanged.
+  Coverage is now 99.2% (1449/1461 on D026); established seed streams unchanged.
 - **NPU-region random mode — DONE 2026-07-14.** Additive `--npu` bursts
   exercise back-to-back GO, staging/readback ordering, busy-time immediate
   address/data dependencies, STATUS/ID/unmapped reads. Both cores 25/25;
@@ -133,6 +136,10 @@ de-risks task #3 (less state to pipeline). Evidence: audit §1.
 ## Branch / merge state (2026-07-14)
 
 - `main` = `ab79b50` = D024 + D025 merged and pushed.
+- `codex/verif-hardening` = verification/evidence batch commits `533aaa4` +
+  `15f6d98` (local, not pushed).
+- `codex/lq-balanced-tree` = D026 + B015 local branch; full sim, fit, STA,
+  and assembler green; merge/push still pending.
 - Feature branches `mlp-board-demo`, `gshare-m9k-pht` pushed (now folded
   into main; safe to delete locally once you're comfortable).
 - Env: the old build landmines are guarded in the Makefile — `make` just

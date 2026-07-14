@@ -140,7 +140,7 @@ counts (rdcycle) — that ratio is the reported speedup.
 
 ## Measured end-to-end result
 
-Current-tree D025 runs (32 images, 32/32 classifications correct, NPU logits
+Measured D025 runs (32 images, 32/32 classifications correct, NPU logits
 bit-exact with the software path) measure:
 
 | Core | Software cycles | NPU cycles | Cycle speedup |
@@ -186,6 +186,8 @@ The array maps to 16 embedded 9×9 multipliers and is integrated with both
 cores. An OoO configuration containing the NPU, M9K-resident program memory,
 PLL, and timing constraints has run on the DE10-Lite at 16.67 MHz and booted
 standalone from internal flash; that hardware proof used the LED walker, not
-NPU inference. The current D025 MNIST top—including M9K-initialized weights—
-fits at 34,714 / 49,760 LEs (70%) and closes timing with +17.47 ns setup slack.
-Its `.sof` is built; the first physical MNIST flash/demo remains pending.
+NPU inference. The current D026 MNIST top—including M9K-initialized weights—
+fits at 34,798 / 49,760 LEs (70%), reaches 25.10 MHz slow-85C Fmax, and closes
+timing at 16.67 MHz with +20.166 ns setup slack. Its `.sof` is built; the first
+physical MNIST flash/demo remains pending. The speedup table above retains its
+D025 provenance because the full MLP benchmark was not rerun for D026.

@@ -3,9 +3,35 @@
 Every real bug found in this project: symptom, root cause, how it was caught,
 and the fix. Newest entries at the top.
 
-Status legend: **OPEN** (not yet fixed) / **FIXED** (fix merged).
+Status legend: **OPEN** (not yet fixed) / **FIXED ON BRANCH** (implemented and
+verified, merge pending) / **FIXED** (fix merged).
 
 ---
+
+## B015 — slot1-only load can dispatch into a full-enough LQ without allocating an entry — FIXED ON BRANCH (2026-07-14)
+
+- **Symptom:** with seven of eight LQ entries occupied, a rename group whose
+  slot0 is not a load and slot1 is a RAM load passes the top-level `lq_ge1`
+  resource gate, but the load is not recorded in the LQ. If it executes ahead
+  of an older unresolved store, a later same-address store fill has no entry
+  to match and therefore cannot poison/replay the stale load. No published
+  workload was observed to diverge, but this is a real correctness hole, not
+  a performance-only bookkeeping issue.
+- **Root cause:** `alloc1_en` always wrote `free1` and required `f1v`, even
+  when `alloc0_en=0`. A slot1-only load must be packed into `free0`; at
+  occupancy seven, `free0` exists while `free1` does not. The branch-flush
+  suppression path repeated the same incorrect free1 assumption. This is the
+  load-queue analogue of B009 in the store queue.
+- **How caught:** independent adversarial review of the D026 standalone LQ
+  golden model noticed that neither RTL nor stimulus exercised the legal
+  `alloc0_en=0, alloc1_en=1` pattern. A permanent directed case now fills the
+  LQ to seven entries, dispatches a slot1-only load into the final entry,
+  executes it, and proves a matching older store reports its ROB tag.
+- **Fix:** pack slot1 into `free0` when slot0 is not a load, otherwise into
+  `free1`; use the same selected slot for same-edge flush suppression. New
+  INV-L3 rejects any allocation request without a packed free entry. The
+  standalone model passes 250,026 cycles / 218,731 store probes / 55,318
+  matches, and both complete lockstep merge gates remain green.
 
 ## B014 — store-set training captured a violation in the flush-at-head start cycle, then read a dead ROB entry — FIXED (2026-07-09)
 

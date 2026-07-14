@@ -634,17 +634,46 @@ hardening (same `codex/verif-hardening` branch):**
   NEXT/AUDIT now put an LQ timing decision ahead of the scheduler/JALR work.
   No microarchitecture was changed; three options await Hanna in NEXT §2.
 
+**2026-07-14 (night) — D026 LQ violation selector timing rewrite (branch
+`codex/lq-balanced-tree`, stacked on `codex/verif-hardening`; NOT merged or
+pushed):**
+- Replaced the 8-entry serial oldest-violated-load scan with a fixed
+  **8→4→2→1 balanced minimum-age tree**. Exact contract is preserved:
+  strict-younger matching, byte overlap, minimum modular age, lower physical
+  index on equal age, and zero tag on no hit. The original scan remains as a
+  `VERILATOR`-only every-cycle oracle.
+- New standalone golden-model `lq-tb`: directed lifecycle/wrap/pre-edge
+  cases plus 250,000 random cycles; **250,026 cycles / 218,731 probes / 55,318
+  hits PASS**. It found pre-existing **B015**: with seven entries occupied,
+  slot0 non-load + slot1 load incorrectly requested the nonexistent second
+  free slot, so a dispatched load could escape LQ tracking. Allocation now
+  selects free0 for slot1-only dispatch; invariant checks make it permanent.
+- Full gates after the fix: both cores **20/20 + 40/40 + 25/25 base + 25/25
+  system + 25/25 NPU + 80/80 X/reset**, plus OoO **25/25 `--vio`**, all
+  lockstep-clean. Fresh D026 line coverage is **99.2% (1449/1461)** across
+  60 programs/core. Reportable 720-iteration CoreMark: **1.422552 CoreMark/MHz,
+  IPC 1.026**, official CRCs, 519,453,600 instructions lockstep-checked;
+  **+20.91%** vs the exact-image in-order control.
+- Full board fit/STA: **34,798/49,760 LEs (70%)**, 95 M9Ks, fit/assembly 0
+  errors; slow-85 Fmax **23.51 → 25.10 MHz (+6.8%)**, setup slack +20.166 ns
+  at 16.67 MHz, hold +0.307 ns, zero unconstrained paths. LQ is absent from
+  all top-20 paths. New limiter is the SQ serial youngest-older
+  forwarding/partial-overlap replay selector. Keep PLL /3: /2 has only
+  ~0.17 ns theoretical margin before the SQ change.
+
 **Next → see `docs/NEXT.md` (the start-here backlog).** In brief:
 (0) **Flash the MNIST demo** — `.sof` is built; DEFERRED by Hanna
 2026-07-12, it's her hardware step (USB-Blaster → digit demo → video).
 Do NOT auto-do. (1) ~~PRF→M9K LVT~~ **DONE + merged (D025, `ab79b50`,
-−8,895 LEs → 70%, IPC-neutral).** (2) **LQ timing decision** — balanced
-parallel oldest-match tree (recommended), registered CAM request, or a
-conservative FPGA profile; current STA proves this is the first limiter.
-(3) 2-stage scheduler only after post-LQ STA. (4) JALR target adder only if it
-returns to the measured paths. (5) IQ payload split (~3k LEs). (6) Small infra: NPU on-board error
+−8,895 LEs → 70%, IPC-neutral).** (2) ~~LQ timing tree~~ **DONE D026;
+not yet merged.** (3) **SQ forwarding/replay selector** — exact balanced
+youngest-older tree + serial oracle + standalone unit model; current STA proves
+it is now the first limiter. (4) 2-stage scheduler only after post-SQ STA.
+(5) JALR target adder only if it
+returns to the measured paths. (6) IQ payload split (~3k LEs). (7) Small infra: NPU on-board error
 patterns, `make -j` suites, loop/call-tree/RAS random coverage,
 INV-G2 negative self-test. **Env note:** the two old build landmines are
 GUARDED IN THE MAKEFILE — `make` just works; if overriding, VERILATOR_ROOT
-must be `/ucrt64/share/verilator` (mount form). D024/D025 are merged;
+must be `/ucrt64/share/verilator` (mount form). D024/D025 are merged; D026 is
+local on `codex/lq-balanced-tree`;
 physical flashing remains Hanna's deferred hardware step.

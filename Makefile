@@ -227,6 +227,24 @@ prf-tb: $(PRF_TB)
 	./$(PRF_TB)
 .PHONY: prf-tb
 
+# --- load-queue unit testbench (balanced violation selector, D026) ------------
+# Standalone public-interface lifecycle model plus exact modular-age CAM oracle.
+# The DUT also carries an independent Verilator-only old-scan equivalence check.
+LQ_TB := obj_dir_lq/Vooo_lq
+
+$(LQ_TB): Makefile rtl/ooo/ooo_lq.v rtl/ooo/ooo_pkg.vh rtl/ooo/ooo_uop.vh \
+          tb/verilator/lq_tb.cpp
+	@$(CHECK_VROOT)
+	$(VERILATOR) --cc --exe --build -j 0 --top-module ooo_lq \
+	    --Mdir obj_dir_lq -Wno-fatal -Irtl/ooo \
+	    -MAKEFLAGS OPT_FAST=-O2 -MAKEFLAGS OPT_SLOW=-O2 \
+	    -MAKEFLAGS OPT_GLOBAL=-O2 -MAKEFLAGS VM_PARALLEL_BUILDS=1 \
+	    rtl/ooo/ooo_lq.v tb/verilator/lq_tb.cpp -o Vooo_lq
+
+lq-tb: $(LQ_TB)
+	./$(LQ_TB)
+.PHONY: lq-tb
+
 # --- software build ------------------------------------------------------------
 sw: $(SW_TESTS)
 
@@ -661,7 +679,7 @@ coremark-ooo:
 	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO) CM_ITER=$(CM_ITER)
 coremark-quick-ooo:
 	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO) CM_ITER=10 CM_REQUIRE_REPORT=0
-verify-ooo: regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo
+verify-ooo: lq-tb regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo
 .PHONY: sim-ooo regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo \
 	    coremark-ooo coremark-quick-ooo verify-ooo
 
@@ -703,7 +721,7 @@ synth-sta:
 .PHONY: synth-fit synth-sta
 
 clean:
-	rm -rf obj_dir obj_dir_ooo obj_dir_x obj_dir_x_ooo obj_dir_npu obj_dir_stset obj_dir_prf sim.fst
+	rm -rf obj_dir obj_dir_ooo obj_dir_x obj_dir_x_ooo obj_dir_npu obj_dir_stset obj_dir_prf obj_dir_lq sim.fst
 	rm -f sw/tests/*.elf sw/tests/*.bin sw/tests/*.hex
 	rm -f sw/ctests/*.elf sw/ctests/*.bin sw/ctests/*.hex
 	rm -f sw/coremark/coremark.elf sw/coremark/*.bin sw/coremark/*.hex

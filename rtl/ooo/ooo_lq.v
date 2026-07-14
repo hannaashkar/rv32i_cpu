@@ -60,8 +60,8 @@ module ooo_lq (
 
     // violation output (combinational): the OLDEST younger executed load that
     // overlaps the filling store. The top poisons vio_tag's ROB entry.
-    output reg         vio_en,
-    output reg  [5:0]  vio_tag,
+    output wire        vio_en,
+    output wire [5:0]  vio_tag,
 
     // retire: free the oldest entry/entries in program order (<=2/cycle)
     input  wire        retire0_en,
@@ -111,34 +111,136 @@ module ooo_lq (
             end
     end
 
+    // Pack load allocations independent of their decode slot.  If slot0 is
+    // not a load and slot1 is, slot1 must consume the FIRST free LQ entry.
+    // Using free1 unconditionally drops that load at occupancy=7 (B015).
+    wire [LQW-1:0] alloc1_slot = alloc0_en ? free1 : free0;
+    wire           alloc1_slot_v = alloc0_en ? f1v : f0v;
+
     // ------------------------------------------------------------------
-    // violation CAM (combinational): oldest younger executed overlapping load
+    // Violation CAM + balanced oldest-match reduction (D026).
+    //
+    // The original implementation accumulated the minimum age in a for-loop.
+    // Quartus preserved that source-order dependency as an 8-deep compare/mux
+    // chain on the dmem-load -> dependent-store -> rob_poison critical path.
+    // Build all eight match tuples in parallel, then reduce them through a
+    // fixed 8 -> 4 -> 2 -> 1 tree.  This is cycle- and bit-exact:
+    //   tuple = {valid_match, age_from_head, ROB_tag}
+    //   winner = smallest age; on an equal-age tie, the lower LQ index wins
+    //            (the same first-match behavior as the old 0..7 scan).
+    // In-flight ROB tags are unique, so the tie rule is defensive rather than
+    // architecturally observable.  No-match still drives vio_tag=0 exactly as
+    // before.
     // ------------------------------------------------------------------
-    reg        m_found;
-    reg [5:0]  m_age;      // (tag - head) of the current best (oldest) match
-    reg [5:0]  m_tag;
+    function [12:0] oldest_of_two;
+        input [12:0] left;
+        input [12:0] right;
+        begin
+            if (!left[12])
+                oldest_of_two = right;
+            else if (right[12] && (left[11:6] > right[11:6]))
+                oldest_of_two = right;
+            else
+                oldest_of_two = left;
+        end
+    endfunction
+
+    wire [5:0] vio_st_age;
+    wire [5:0] vio_age  [0:LQD-1];
+    wire       vio_hit  [0:LQD-1];
+    wire [12:0] vio_cand [0:LQD-1];
+
+    assign vio_st_age = st_tag - head_tag;
+
+    genvar vg;
+    generate for (vg = 0; vg < LQD; vg = vg + 1) begin : GEN_VIO_CAND
+        assign vio_age[vg] = tag[vg] - head_tag;
+        assign vio_hit[vg] = st_fill_en
+                           && v[vg]
+                           && executed[vg]
+                           && (vio_age[vg] > vio_st_age)
+                           && (waddr[vg] == st_waddr)
+                           && ((bmask[vg] & st_bytemask) != 4'b0);
+        assign vio_cand[vg] = {vio_hit[vg], vio_age[vg], tag[vg]};
+    end endgenerate
+
+    wire [12:0] vio_l1 [0:3];
+    wire [12:0] vio_l2 [0:1];
+    wire [12:0] vio_winner;
+
+    assign vio_l1[0] = oldest_of_two(vio_cand[0], vio_cand[1]);
+    assign vio_l1[1] = oldest_of_two(vio_cand[2], vio_cand[3]);
+    assign vio_l1[2] = oldest_of_two(vio_cand[4], vio_cand[5]);
+    assign vio_l1[3] = oldest_of_two(vio_cand[6], vio_cand[7]);
+    assign vio_l2[0] = oldest_of_two(vio_l1[0], vio_l1[1]);
+    assign vio_l2[1] = oldest_of_two(vio_l1[2], vio_l1[3]);
+    assign vio_winner = oldest_of_two(vio_l2[0], vio_l2[1]);
+
+    assign vio_en  = vio_winner[12];
+    assign vio_tag = vio_winner[12] ? vio_winner[5:0] : 6'd0;
+
+`ifdef VERILATOR
+    initial if (LQD != 8)
+        $fatal(1, "ooo_lq: fixed violation tree requires LQD=8 (got %0d)",
+               LQD);
+
+    // INV-L1: the balanced tree must remain exactly equivalent to the original
+    // source-order scan.  Keep this deliberately separate from the tree so
+    // every full-core and standalone Verilator run is a live equivalence test.
+    reg       vio_ref_en;
+    reg [5:0] vio_ref_age;
+    reg [5:0] vio_ref_tag;
+    integer   vio_ref_i;
     always @(*) begin
-        m_found = 1'b0; m_age = 6'd63; m_tag = 6'd0;
+        vio_ref_en  = 1'b0;
+        vio_ref_age = 6'd63;
+        vio_ref_tag = 6'd0;
         if (st_fill_en) begin
-            for (i = 0; i < LQD; i = i + 1) begin
-                // valid, executed, YOUNGER than the store, same word,
-                // byte-mask overlap
-                if (v[i] && executed[i]
-                    && ((tag[i] - head_tag) > (st_tag - head_tag))
-                    && (waddr[i] == st_waddr)
-                    && ((bmask[i] & st_bytemask) != 4'b0)) begin
-                    // keep the OLDEST such younger load (smallest age)
-                    if (!m_found || ((tag[i] - head_tag) < m_age)) begin
-                        m_found = 1'b1;
-                        m_age   = tag[i] - head_tag;
-                        m_tag   = tag[i];
+            for (vio_ref_i = 0; vio_ref_i < LQD;
+                 vio_ref_i = vio_ref_i + 1) begin
+                if (v[vio_ref_i] && executed[vio_ref_i]
+                    && ((tag[vio_ref_i] - head_tag)
+                        > (st_tag - head_tag))
+                    && (waddr[vio_ref_i] == st_waddr)
+                    && ((bmask[vio_ref_i] & st_bytemask) != 4'b0)) begin
+                    if (!vio_ref_en
+                        || ((tag[vio_ref_i] - head_tag) < vio_ref_age)) begin
+                        vio_ref_en  = 1'b1;
+                        vio_ref_age = tag[vio_ref_i] - head_tag;
+                        vio_ref_tag = tag[vio_ref_i];
                     end
                 end
             end
         end
-        vio_en  = m_found;
-        vio_tag = m_tag;
     end
+
+    integer vio_inv_i;
+    integer vio_inv_j;
+    always @(posedge clk) if (!reset) begin
+        if ((vio_en !== vio_ref_en) || (vio_tag !== vio_ref_tag))
+            $fatal(1, "ooo_lq INV-L1: tree=%b/%0d scan=%b/%0d",
+                   vio_en, vio_tag, vio_ref_en, vio_ref_tag);
+
+        // INV-L2: ROB tags identify unique in-flight instructions. Duplicate
+        // valid tags would make both execute matching and age selection
+        // ambiguous, independent of the tree implementation.
+        for (vio_inv_i = 0; vio_inv_i < LQD; vio_inv_i = vio_inv_i + 1)
+            for (vio_inv_j = vio_inv_i + 1; vio_inv_j < LQD;
+                 vio_inv_j = vio_inv_j + 1)
+                if (v[vio_inv_i] && v[vio_inv_j]
+                    && (tag[vio_inv_i] == tag[vio_inv_j]))
+                    $fatal(1, "ooo_lq INV-L2: duplicate live ROB tag %0d",
+                           tag[vio_inv_i]);
+
+        // INV-L3: dispatch resource checks must never request more load
+        // entries than exist. This also keeps a future packing regression
+        // from becoming another silently untracked speculative load.
+        if (alloc0_en && !f0v)
+            $fatal(1, "ooo_lq INV-L3: alloc0 requested with no free entry");
+        if (alloc1_en && !alloc1_slot_v)
+            $fatal(1, "ooo_lq INV-L3: alloc1 requested without a packed slot");
+    end
+`endif
 
     // ------------------------------------------------------------------
     // state
@@ -174,10 +276,10 @@ module ooo_lq (
                 executed[free0] <= 1'b0;
                 tag[free0]      <= alloc0_tag;
             end
-            if (alloc1_en && f1v) begin
-                v[free1]        <= 1'b1;
-                executed[free1] <= 1'b0;
-                tag[free1]      <= alloc1_tag;
+            if (alloc1_en && alloc1_slot_v) begin
+                v[alloc1_slot]        <= 1'b1;
+                executed[alloc1_slot] <= 1'b0;
+                tag[alloc1_slot]      <= alloc1_tag;
             end
 
             // squash LAST (overrides alloc of dying entries)
@@ -188,7 +290,7 @@ module ooo_lq (
                     if (v[i] && ((tag[i] - head_tag) > (flush_tag - head_tag)))
                         v[i] <= 1'b0;
                 if (alloc0_en && f0v) v[free0] <= 1'b0;
-                if (alloc1_en && f1v) v[free1] <= 1'b0;
+                if (alloc1_en && alloc1_slot_v) v[alloc1_slot] <= 1'b0;
             end
         end
     end
