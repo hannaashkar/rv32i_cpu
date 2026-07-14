@@ -16,13 +16,24 @@ the AUIPC+JALR pair, LUI/AUIPC, and Zicsr ops (mscratch + counter reads).
 x0 appears as rd occasionally on purpose. Registers x28-x31 are reserved
 for the exit sequence.
 
-Usage: gen_random_test.py SEED OUT.hex [LENGTH] [--vio]
+Usage: gen_random_test.py SEED OUT.hex [LENGTH] [--vio] [--sys] [--npu]
 
 --vio  (D020 LQ stress) periodically inject a "late-store / early-load to the
        SAME address" pattern so the load-ordering violation CAM + poison +
        flush-at-head recovery actually fires under random interleaving. Off by
        default so the proven golden seeds are byte-identical; on it uses
        reserved scratch regs x24-x27 and is self-terminating + lockstep-safe.
+
+--sys  inject FENCE, ECALL, EBREAK, and a reserved opcode at low weight. The
+       current no-trap contract retires each as a side-effect-free NOP; the
+       independent ISS checks that contract at every retirement. This is a
+       separate additive lane so the proven default and --vio seed streams
+       remain byte-identical.
+
+--npu  inject adversarial NPU MMIO bursts: staged A/B writes, back-to-back GO
+       commands, C/STATUS/ID/unmapped reads, and immediate-producer address/
+       store-data dependencies while the array is busy. This targets the
+       B010/B011 ordering/interlock space. The ISS mirrors the NPU exactly.
 """
 import random
 import sys
@@ -61,8 +72,20 @@ DATA_REGS = list(range(1, 16))          # rd/rs pool (x1..x15)
 BASE_REGS = [20, 21, 22, 23]            # stable memory base registers
 
 VIO_REGS = [24, 25, 26, 27]             # scratch regs for the --vio pattern
+NPU_BASE = 19                            # stable 0x5000_0000 base (--npu)
+NPU_REGS = [16, 17, 18]                  # --npu scratch; outside DATA_REGS
 
-def gen(seed, length, vio=False):
+# Unsupported-system/decode-tail instructions. 0x0083f37f uses a reserved
+# opcode with non-zero rd/rs/funct fields so an accidental partial decode is
+# much more likely to become architecturally visible than an all-zero word.
+SYS_NOP_WORDS = [
+    0x0FF0000F,                          # FENCE iorw, iorw
+    0x00000073,                          # ECALL
+    0x00100073,                          # EBREAK
+    0x0083F37F,                          # reserved opcode, hot operand fields
+]
+
+def gen(seed, length, vio=False, sysops=False, npu_mode=False):
     rng = random.Random(seed)
     words = []
 
@@ -88,6 +111,42 @@ def gen(seed, length, vio=False):
         emit(s_type(0, s, b, 2))                  # sw   s, 0(b)   OLDER store (late addr)
         emit(i_type(0, base_reg, 2, l, 0x03))     # lw   l, 0(base) YOUNGER load (early)
 
+    # --- NPU MMIO ordering/interlock stress (B010/B011) -----------------
+    # Each burst has two deliberately adversarial shapes:
+    #   GO; address-producer; C load    -> load must wait/replay until idle
+    #   GO; data-producer; A/B store   -> held store data must not decay
+    # Older staging stores + younger reads also exercise the OoO strong-order
+    # rule that fixed B010. No self-check is needed: the ISS executes the NPU
+    # atomically at GO, and compares every retired load/store in program order.
+    def emit_npu():
+        before = len(words)
+        data_r, ctrl_r, addr_r = NPU_REGS
+        stage_offsets = list(range(0x10, 0x20, 4)) \
+                      + list(range(0x20, 0x30, 4))
+
+        # Fill all A/B staging words with varied signed-byte patterns. Every
+        # store immediately follows its producer to stress forwarding.
+        for off in stage_offsets:
+            emit(i_type(rng.getrandbits(12), 0, 0, data_r, 0x13))
+            emit(s_type(off, data_r, NPU_BASE, 2))
+
+        emit(i_type(3, 0, 0, ctrl_r, 0x13))        # GO | CLR
+        emit(s_type(0x08, ctrl_r, NPU_BASE, 2))
+        c_off = 0x40 + 4 * rng.randrange(16)
+        emit(i_type(c_off, NPU_BASE, 0, addr_r, 0x13))
+        emit(i_type(0, addr_r, 2, data_r, 0x03))   # held/replayed C load
+
+        emit(i_type(1, 0, 0, ctrl_r, 0x13))        # second GO, accumulate
+        emit(s_type(0x08, ctrl_r, NPU_BASE, 2))
+        st_off = rng.choice(stage_offsets)
+        emit(i_type(rng.getrandbits(11), 0, 0, data_r, 0x13))
+        emit(s_type(st_off, data_r, NPU_BASE, 2))  # held store-data case
+        emit(i_type(st_off, NPU_BASE, 2, addr_r, 0x03))  # read-after-write
+        emit(i_type(0x04, NPU_BASE, 2, ctrl_r, 0x03))    # STATUS: done, !busy
+        emit(i_type(0x00, NPU_BASE, 2, addr_r, 0x03))    # ID
+        emit(i_type(0x30, NPU_BASE, 2, data_r, 0x03))    # unmapped -> 0
+        return len(words) - before
+
     # --- init: seed the register pool with varied constants -----------
     for r in DATA_REGS:
         emit(u_type(rng.getrandbits(20), r, 0x37))            # lui
@@ -95,6 +154,8 @@ def gen(seed, length, vio=False):
     # memory bases: within dmem's aliased range, far from the IO region
     for i, r in enumerate(BASE_REGS):
         emit(u_type(0x1 + i * 0x8, r, 0x37))                  # 0x1000,0x9000,...
+    if npu_mode:
+        emit(u_type(0x50000, NPU_BASE, 0x37))                 # 0x5000_0000
     emit(NOP)
 
     # --- random body ----------------------------------------------------
@@ -104,12 +165,23 @@ def gen(seed, length, vio=False):
         return rng.choice([0] + DATA_REGS)
 
     body = 0
+    if npu_mode:
+        body += emit_npu()                       # guaranteed coverage per seed
     while body < length:
         # --vio: inject a violation-forcing pattern roughly every ~40 body
         # instrs. Additive only (default path unchanged when vio is False).
         if vio and rng.random() < 0.025:
             emit_vio(rng.choice(BASE_REGS))
             body += 12
+            continue
+        if npu_mode and rng.random() < 0.005:
+            body += emit_npu()
+            continue
+        # Coverage-tail lane: short-circuiting means this consumes no PRNG
+        # samples unless --sys is present, preserving every existing stream.
+        if sysops and rng.random() < 0.02:
+            emit(rng.choice(SYS_NOP_WORDS))
+            body += 1
             continue
         k = rng.random()
         if k < 0.35:                                   # R-type ALU
@@ -179,12 +251,18 @@ def gen(seed, length, vio=False):
 def main():
     if len(sys.argv) < 3:
         sys.exit(__doc__)
-    argv = [a for a in sys.argv[1:] if a != "--vio"]
-    vio = "--vio" in sys.argv
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    unknown = flags - {"--vio", "--sys", "--npu"}
+    if unknown:
+        sys.exit("unknown option(s): %s" % ", ".join(sorted(unknown)))
+    argv = [a for a in sys.argv[1:] if not a.startswith("--")]
+    vio = "--vio" in flags
+    sysops = "--sys" in flags
+    npu_mode = "--npu" in flags
     seed = int(argv[0])
     out = argv[1]
     length = int(argv[2]) if len(argv) > 2 else 3000
-    words = gen(seed, length, vio=vio)
+    words = gen(seed, length, vio=vio, sysops=sysops, npu_mode=npu_mode)
     with open(out, "w") as f:
         f.write("// constrained-random test, seed %d, %d words\n"
                 % (seed, len(words)))

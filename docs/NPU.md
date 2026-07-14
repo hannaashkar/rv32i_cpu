@@ -149,10 +149,15 @@ counts (rdcycle) — that ratio is the reported speedup.
 3. **Directed C tests** in the regression: `sw/ctests/npu_basic.c`
    (register semantics, signed edge cases, accumulate/clear behavior),
    `sw/ctests/npu_matmul.c` (random tiled GEMMs vs software reference).
-4. **Assertions** (Verilator-only, `ifdef` guarded): MMIO write while
+4. **NPU/MMIO constrained-random** (`make regress-rand-npu`): 25 seeds
+   inject staged A/B traffic, back-to-back GO, immediate-producer address
+   and store-data dependencies while busy, ordered readbacks, and unmapped
+   reads. Measured 2026-07-14: 282 adversarial bursts / 564 GO commands per
+   core, both cores 25/25 lockstep-clean. This is the permanent B010/B011 gate.
+5. **Assertions** (Verilator-only, `ifdef` guarded): MMIO write while
    busy is fatal on both cores; an IO load completing with an SQ forward
    hit is fatal in the OoO core.
-5. Existing suites (`make verify` / `verify-ooo`) must stay green — the
+6. Existing suites (`make verify` / `verify-ooo`) must stay green — the
    interlocks only add replay/stall conditions that are quiescent for
    non-IO code.
 

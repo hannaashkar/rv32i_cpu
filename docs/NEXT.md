@@ -1,8 +1,10 @@
 # Next tasks — start here
 
-Last updated 2026-07-12. `main` = the MNIST-demo board top with the
-banked-M9K gshare (D024); both cores verified green; `.sof` built and
-ready to flash. Everything below is the agreed backlog, most-ready first.
+Last updated 2026-07-14. `main` = the MNIST-demo board top with the
+banked-M9K gshare (D024) and banked-M9K PRF (D025); both cores verified
+green. `synth/output_files/rv32i_cpu.sof` was reassembled successfully on
+2026-07-14 and matches D025/current `main`. Everything below is the agreed
+backlog, most-ready first.
 
 Division of labor (project rule): **Hanna owns microarchitecture
 decisions** — for those, Claude presents 2–3 options with tradeoffs and
@@ -39,8 +41,8 @@ delegated → Option A). **Board top 43,609 → 34,714 LEs (88% → 70%,
 −8,895); M9K 95/182; fit 0 errors, timing MET +17.47 ns; IPC-neutral**
 (CoreMark cycle-identical to baseline, hello.c 2013/1882; prf-tb 300k random
 + OoO 19/19+40/40+25/25+25/25-vio lockstep-clean; 5-lens adversarial review
-0 defects). Record: DECISIONS.md D025. **Branch not merged — pending Hanna's
-review** (the estimate was ~9–10k LEs; delivered −8,895, on the nose).
+0 defects). Record: DECISIONS.md D025. **Merged to `main` and pushed as
+`ab79b50`** (the estimate was ~9–10k LEs; delivered −8,895, on the nose).
 
 ## 2. 2-stage pipelined issue-queue scheduler  — [Hanna, big µarch]
 
@@ -75,21 +77,27 @@ de-risks task #2 (less state to pipeline). Evidence: audit §1.
   touches board SW behavior, but tiny.)
 - **Parallel test suites** (`make -j`) — regress/isa/rand run serially in
   shell loops; ~4–6× wall-clock win via per-test stamp targets.
-- **FENCE / ECALL / EBREAK + NPU-region random modes** — the 1% RTL
-  coverage tail (99.0% now) is exactly these never-executed decode paths;
-  add them to `gen_random_test.py` (ISS already NOPs them → lockstep
-  checks for free) + a directed `sys_nops.S`.
-- **X-state randomization lane** — `--x-assign unique` build variant to
-  catch missing-reset bugs lockstep can't see (both arms zero-init today).
+- **System/decode-tail coverage — DONE 2026-07-14.** Directed
+  `sys_nops.S` + additive `--sys` random lane; both cores 20/20 directed
+  and 25/25 system-random, 1,148 injected words/core, zero divergence.
+  Coverage is now 99.2% (1428/1440); established seed streams unchanged.
+- **NPU-region random mode — DONE 2026-07-14.** Additive `--npu` bursts
+  exercise back-to-back GO, staging/readback ordering, busy-time immediate
+  address/data dependencies, STATUS/ID/unmapped reads. Both cores 25/25;
+  282 bursts / 564 GO commands per core, lockstep-clean; old streams unchanged.
+- **X-state randomization lane — DONE 2026-07-14.** Separate
+  `--x-assign/--x-initial unique` models + four explicit randomized-reset
+  seeds; full directed+C suite 80/80 on each core, lockstep-clean. It is now
+  part of both merge gates without perturbing deterministic benchmark builds.
 - **INV-G2 negative self-test** — confirm the new gshare data-path shadow
   actually fires (deliberately flip the crossbar, expect $fatal, revert);
   proves it isn't vacuous.
 
 ---
 
-## Branch / merge state (2026-07-12)
+## Branch / merge state (2026-07-14)
 
-- `main` = `e2a54b7` = everything above's prerequisites merged + pushed.
+- `main` = `ab79b50` = D024 + D025 merged and pushed.
 - Feature branches `mlp-board-demo`, `gshare-m9k-pht` pushed (now folded
   into main; safe to delete locally once you're comfortable).
 - Env: the old build landmines are guarded in the Makefile — `make` just

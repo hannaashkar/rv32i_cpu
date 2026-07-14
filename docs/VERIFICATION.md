@@ -1,6 +1,6 @@
 # Verification strategy
 
-The verification stack has five independent stimulus layers, all of them
+The verification stack has eight verification lanes, all of them
 checked by the same **golden-model lockstep co-simulation** — so every
 test contributes checking at every retired instruction, not just at its
 final CHECK.
@@ -33,24 +33,33 @@ modeled exactly; a quirk is architecture once documented.
 | Directed suites (`sw/tests/*.S`, `sw/ctests/*.c`) | `make regress` | Targeted corner cases: hazards found as real bugs (B004/B007/B008 regressions), BTB-stale returns, sub-word lanes, CSR semantics, exact instret deltas, the C runtime |
 | Official ISA tests (riscv-tests rv32ui, vendored) | `make regress-isa` | 40/40 third-party acceptance tests — the industry's definition of "implements RV32I" |
 | Constrained-random (`scripts/gen_random_test.py`) | `make regress-rand` | 25 seeds × 3000 instructions of weighted-random mix incl. misaligned accesses and dense hazards; forward-only control flow guarantees termination; reproducible by seed |
+| System/decode-tail random (`--sys`) | `make regress-rand-sys` | 25 seeds × 3000 instructions with low-weight FENCE, ECALL, EBREAK, and reserved-opcode injection; proves the documented no-trap NOP contract at retirement without perturbing the established default seeds |
+| NPU/MMIO ordering random (`--npu`) | `make regress-rand-npu` | 25 seeds × 3000 instructions with staged A/B traffic, back-to-back GO, busy-time address/data dependencies, readbacks, and unmapped accesses; targets B010/B011 while the ISS mirrors every NPU access |
+| Randomized startup/reset | `make regress-x` | Separate `--x-assign unique --x-initial unique` model; the full directed+C suite is replayed at four explicit `+verilator+rand+reset+2` seeds to expose state that accidentally depends on Verilator's normal zero initialization |
 | LQ-violation stress (`--vio` mode, OoO only) | `make regress-rand-vio` | Same 25 seeds but with a late-store/early-load-to-same-address pattern injected so the D020 speculative-load violation CAM + poison + flush-at-head recovery actually fires (1185 real violations across the seeds; the plain seeds essentially never violate). Guards B013. |
 | Benchmark | `make coremark` | 433M-instruction real-workload run, CRC-validated AND lockstep-checked |
 
-`make verify` = regress + regress-isa + regress-rand. `make verify-ooo` adds
-`regress-rand-vio` (the LQ recovery path). All green is the merge gate for
-`main`.
+`make verify` = regress + regress-isa + regress-rand + regress-rand-sys +
+regress-rand-npu + regress-x. `make verify-ooo` adds `regress-rand-vio`
+(the LQ recovery path) and runs the OoO X-state model. All green is the
+merge gate for `main`.
 
-## Coverage (measured 2026-07-11)
+## Coverage (measured 2026-07-14)
 
 `make coverage` builds line-coverage-instrumented models of BOTH cores,
-runs the directed + C + ISA suites on each (59 programs per core),
+runs the directed + C + ISA suites on each (60 programs per core),
 merges the per-test data, and prints the combined figure. Current:
 
-- **RTL line coverage: 99.0% (1338/1351 lines)**, both cores combined.
+- **RTL line coverage: 99.2% (1428/1440 lines)**, both cores combined.
 - Merged lcov data lands in `build/cov/coverage.info` for annotation.
-- The uncovered tail is dominated by decode paths no test executes yet
-  (FENCE / ECALL / EBREAK / reserved opcodes) — a known gap on the
-  audit list, closed by adding them to the random mix once decided.
+- The former decode tail is closed: `sw/tests/sys_nops.S` proves exact
+  retirement plus no register/CSR/memory side effects, and the 25-seed
+  `--sys` lane injected **1,148** system/reserved words on each core with
+  zero lockstep divergence. Neither core's control/decode module has an
+  uncovered line now.
+- The remaining 12 uncovered lines are defensive/default or configuration
+  paths in ALU control, memory initialization, SQ recovery, and MMIO; they
+  are not being hidden as "100%" via exclusions.
 
 ## Divergence diagnostics
 
@@ -61,6 +70,18 @@ store), a full ISS architectural register dump, and a pointer to
 divergence 90M instructions into CoreMark gets a usable waveform window
 on the second run. `+force_diverge=<n>` is a permanent TB self-test that
 fires the whole path on demand (verified on both cores).
+
+## Reset/X-state robustness (measured 2026-07-14)
+
+Normal Verilator startup initializes storage to zero, which can hide a missing
+reset. `regress-x` uses separate model directories compiled with
+`--x-assign unique --x-initial unique`, then runs the complete directed+C
+suite at four explicit randomized-reset seeds. The shipping/deterministic
+models and benchmark cycle counts are untouched.
+
+- In-order: **80/80** program-seed runs, lockstep-clean.
+- OoO: **80/80** program-seed runs, lockstep-clean.
+- The lane is now a prerequisite of `make verify` / `make verify-ooo`.
 
 ## Exclusions (documented, not hidden)
 

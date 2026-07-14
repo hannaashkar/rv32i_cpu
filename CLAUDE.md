@@ -548,7 +548,8 @@ merged tree before merge. Main now = the MNIST-demo board top with the
 banked-M9K gshare.
 
 **2026-07-12 (later) — D025 PRF → 18 banked M9K blocks via an LVT (branch
-`prf-m9k-lvt`, NOT merged; Hanna AFK, delegated the pick — chose Option A).
+`prf-m9k-lvt`; Hanna AFK, delegated the pick — chose Option A; subsequently
+merged to `main` and pushed as `ab79b50`).
 NEXT.md Task 1 DONE — the audit's second (and last big) LE pig is gone.**
 - `ooo_prf` was a 6R/3W 64×32 **async-read fabric** register file
   (10,947 LCs). Rewritten to the LaForest LVT construction: **18 M9K banks**
@@ -574,20 +575,50 @@ NEXT.md Task 1 DONE — the audit's second (and last big) LE pig is gone.**
   (`dmem-load → rob_poison`, the D020 LQ CAM) — the PRF left the fabric mux
   cone, so it is off every top-20 path (timing-neutral). docs/PRF_SHRINK.md
   = the options sheet (A chosen; B multipump / C shrink-PHYS / D status-quo
-  considered); DECISIONS.md D025 = the record. Branch pending Hanna's review.
+  considered); DECISIONS.md D025 = the record.
+
+**2026-07-14 — SYSTEM/DECODE COVERAGE TAIL CLOSED (infrastructure-only):**
+- New `sw/tests/sys_nops.S` pins the current no-trap contract for FENCE,
+  ECALL, EBREAK, and a reserved opcode: exact sequential retirement plus
+  no register/CSR/memory side effects. Both cores: directed suite **20/20**.
+- `scripts/gen_random_test.py --sys` is an additive low-weight lane; 25/25
+  seeds × 3000 instructions passed on each core, with **1,148 injected
+  system/reserved words per core** and zero lockstep divergence. SHA-256
+  checks proved the established default and `--vio` streams byte-identical.
+  `make verify[-ooo]` now includes this lane.
+- Re-measured `make coverage`: **99.2% RTL line coverage (1428/1440), 60
+  programs/core**. The former decode tail is closed on both cores; the 12
+  remaining lines are documented defensive/configuration paths. Main was
+  already merged/pushed through D025 at `ab79b50`; this verification batch
+  lives on feature branch `codex/verif-hardening`.
+- Re-ran `quartus_asm` against the D025 fitted database: **0 errors / 0
+  warnings**. `synth/output_files/rv32i_cpu.sof` now matches current `main`
+  and is ready for Hanna's deferred hardware flash step.
+- Closed the audit's reset/X-state blind spot: separate in-order/OoO models
+  compile with `--x-assign unique --x-initial unique`, then replay the full
+  directed+C suite at four explicit randomized-reset seeds. **80/80 runs per
+  core**, all lockstep-clean; no missing-reset defect surfaced. `regress-x`
+  is now part of both merge gates while deterministic benchmark models stay
+  untouched.
+- Closed the NPU random-stimulus blind spot: additive
+  `gen_random_test.py --npu` emits staged A/B traffic, back-to-back GO,
+  busy-time immediate-producer address/data dependencies, and ordered
+  readbacks. Both cores **25/25**, totaling **282 adversarial bursts / 564
+  GO commands per core**, zero lockstep divergence; normal/`--vio` hashes
+  remained byte-identical. `regress-rand-npu` is now in both merge gates.
 
 **Next → see `docs/NEXT.md` (the start-here backlog).** In brief:
 (0) **Flash the MNIST demo** — `.sof` is built; DEFERRED by Hanna
 2026-07-12, it's her hardware step (USB-Blaster → digit demo → video).
-Do NOT auto-do. (1) ~~PRF→M9K LVT~~ **DONE (D025, branch `prf-m9k-lvt`,
-−8,895 LEs → 70%, IPC-neutral; pending Hanna's review).** (2) 2-stage
+Do NOT auto-do. (1) ~~PRF→M9K LVT~~ **DONE + merged (D025, `ab79b50`,
+−8,895 LEs → 70%, IPC-neutral).** (2) 2-stage
 pipelined scheduler — OoO wall-clock fix; **now the top area lever is gone,
 the fabric has even more room (70%)** and this is the biggest remaining win.
 (3) JALR target adder (~10 ns off the dmem-load→rob_poison limiter — which
 is now the sole board critical path after D024/D025 cleared the frontend).
 (4) IQ payload split (~3k LEs). (5) Small infra: NPU on-board error
-patterns, `make -j` suites, FENCE/ECALL random coverage, X-state lane,
+patterns, `make -j` suites, loop/call-tree/RAS random coverage,
 INV-G2 negative self-test. **Env note:** the two old build landmines are
 GUARDED IN THE MAKEFILE — `make` just works; if overriding, VERILATOR_ROOT
-must be `/ucrt64/share/verilator` (mount form). `gshare-m9k-pht`,
-`prf-m9k-lvt` NOT merged — pending Hanna's review + the flash confirmation.
+must be `/ucrt64/share/verilator` (mount form). D024/D025 are merged;
+physical flashing remains Hanna's deferred hardware step.

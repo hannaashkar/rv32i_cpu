@@ -60,5 +60,7 @@ obj_dir_stset/
 obj_dir_prf/
 obj_dir_cov/
 obj_dir_cov_ooo/
+obj_dir_x/
+obj_dir_x_ooo/
 synth/simulation/
 ruvector.db

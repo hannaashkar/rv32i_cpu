@@ -64,6 +64,12 @@ SIM_BIN   := obj_dir/V$(TOP)
 OOO_TOP     := ooo_cpu
 SIM_BIN_OOO := obj_dir_ooo/V$(OOO_TOP)
 
+# Audit X/reset-randomization models. These live in separate build trees so
+# the normal deterministic models and benchmark cycle counts remain untouched.
+X_BIN       := obj_dir_x/V$(TOP)
+X_BIN_OOO   := obj_dir_x_ooo/V$(OOO_TOP)
+XFLAGS      := --x-assign unique --x-initial unique
+
 # D021: OoO A/B knobs. LOAD_POLICY overrides the ooo_cpu top parameter
 # (0=conservative, 1=always-speculate/D020, 2=store-set predicted,
 # 3=21264-style 1-bit load-wait table); empty = the RTL default. VDEFS adds
@@ -142,6 +148,27 @@ $(SIM_BIN_OOO): $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) tb/verilator/iss.h \
 	@$(CHECK_VROOT)
 	$(VERILATOR) $(VFLAGS) $(VDEFS) --top-module $(OOO_TOP) --Mdir obj_dir_ooo \
 	    $(OOO_GFLAGS) -CFLAGS -DOOO_TOP \
+	    $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) -o V$(OOO_TOP)
+
+# Separate X-initialized builds catch state that accidentally depends on
+# Verilator's ordinary all-zero startup. At runtime regress-x also selects
+# rand-reset mode 2 with explicit seeds; the testbench's four reset cycles must
+# bring every architecturally relevant valid/control bit to a legal state.
+$(X_BIN): $(RTL_SRCS) $(SIM_MAIN) tb/verilator/iss.h
+	@$(CHECK_VROOT)
+	$(VERILATOR) $(VFLAGS) $(XFLAGS) --Mdir obj_dir_x \
+	    $(RTL_SRCS) $(SIM_MAIN) -o V$(TOP)
+
+obj_dir_x_ooo/.ooo_flags_stamp: FORCE
+	@mkdir -p obj_dir_x_ooo
+	@[ "$$(cat $@ 2>/dev/null)" = '$(LOAD_POLICY) $(VDEFS) $(XFLAGS)' ] \
+	    || echo '$(LOAD_POLICY) $(VDEFS) $(XFLAGS)' > $@
+
+$(X_BIN_OOO): $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) tb/verilator/iss.h \
+              obj_dir_x_ooo/.ooo_flags_stamp
+	@$(CHECK_VROOT)
+	$(VERILATOR) $(VFLAGS) $(XFLAGS) $(VDEFS) --top-module $(OOO_TOP) \
+	    --Mdir obj_dir_x_ooo $(OOO_GFLAGS) -CFLAGS -DOOO_TOP \
 	    $(RTL_SRCS) $(OOO_SRCS) $(SIM_MAIN) -o V$(OOO_TOP)
 
 # --- NPU unit testbench (docs/NPU.md) -----------------------------------------
@@ -424,6 +451,71 @@ regress-rand: $(RUN_BIN)
 	    $$pass $(RAND_SEEDS) $(RAND_LEN); \
 	[ $$fail -eq 0 ]
 
+# Decode/system coverage-tail lane. Kept separate from the proven default
+# seeds: --sys injects FENCE/ECALL/EBREAK/reserved words at low weight while
+# lockstep proves the documented side-effect-free NOP contract at retirement.
+regress-rand-sys: $(RUN_BIN)
+	@mkdir -p build/rand; pass=0; fail=0; \
+	for s in $$(seq 1 $(RAND_SEEDS)); do \
+	  $(PYTHON) scripts/gen_random_test.py $$s build/rand/sys_$$s.hex $(RAND_LEN) --sys; \
+	  if out=$$(./$(RUN_BIN) +imem=build/rand/sys_$$s.hex); then \
+	    pass=$$((pass+1)); \
+	  else \
+	    fail=$$((fail+1)); printf 'FAIL  sys seed %s\n%s\n' "$$s" "$$out"; \
+	  fi; \
+	done; \
+	printf 'regress-rand-sys: %d/%d seeds passed (system/decode-tail, lockstep-checked)\n' \
+	    $$pass $(RAND_SEEDS); \
+	[ $$fail -eq 0 ]
+
+# NPU/MMIO ordering lane (B010/B011): generated bursts use back-to-back GO,
+# immediate-producer address/store-data dependencies, and strongly ordered
+# readbacks. The ISS mirrors every access; default/vio streams stay unchanged.
+regress-rand-npu: $(RUN_BIN)
+	@mkdir -p build/rand; pass=0; fail=0; \
+	for s in $$(seq 1 $(RAND_SEEDS)); do \
+	  $(PYTHON) scripts/gen_random_test.py $$s build/rand/npu_$$s.hex $(RAND_LEN) --npu; \
+	  if out=$$(./$(RUN_BIN) +imem=build/rand/npu_$$s.hex); then \
+	    pass=$$((pass+1)); \
+	  else \
+	    fail=$$((fail+1)); printf 'FAIL  npu seed %s\n%s\n' "$$s" "$$out"; \
+	  fi; \
+	done; \
+	printf 'regress-rand-npu: %d/%d seeds passed (NPU ordering/interlocks, lockstep-checked)\n' \
+	    $$pass $(RAND_SEEDS); \
+	[ $$fail -eq 0 ]
+
+# Randomized startup/reset lane (audit 2026-07-11). Each X model was compiled
+# with --x-assign/--x-initial unique; runtime mode 2 randomizes initial state.
+# The complete directed+C suite runs at multiple explicit seeds under lockstep.
+X_SEEDS   ?= 4
+X_RUN_BIN ?= $(X_BIN)
+regress-x: $(X_RUN_BIN) $(SW_TESTS) $(CTEST_HEX)
+	@pass=0; fail=0; \
+	for s in $$(seq 1 $(X_SEEDS)); do \
+	  xargs="+verilator+rand+reset+2 +verilator+seed+$$s"; \
+	  for h in $(SW_TESTS); do \
+	    if out=$$(./$(X_RUN_BIN) +imem=$$h $$xargs); then \
+	      pass=$$((pass+1)); \
+	    else \
+	      fail=$$((fail+1)); printf 'FAIL  X seed %s %s\n%s\n' "$$s" "$$h" "$$out"; \
+	    fi; \
+	  done; \
+	  for c in $(CTESTS); do \
+	    b=$${c%.c}; \
+	    if out=$$(./$(X_RUN_BIN) +imem=$$b.text.hex +dmem=$$b.data.hex \
+	              +max_cycles=2000000 $$xargs); then \
+	      pass=$$((pass+1)); \
+	    else \
+	      fail=$$((fail+1)); printf 'FAIL  X seed %s %s\n%s\n' "$$s" "$$c" "$$out"; \
+	    fi; \
+	  done; \
+	done; \
+	printf 'regress-x: %d/%d runs passed (%d seeds, randomized initial/reset state, lockstep-checked)\n' \
+	    $$pass $$(( ($(words $(SW_TESTS)) + $(words $(CTESTS))) * $(X_SEEDS) )) \
+	    $(X_SEEDS); \
+	[ $$fail -eq 0 ]
+
 # --vio variant (D020): same seeds but with the load-ordering-violation
 # stress pattern injected, so the LQ poison + flush-at-head recovery fires
 # under random interleaving (the plain seeds essentially never violate).
@@ -523,12 +615,12 @@ coverage: $(COV_BIN) $(COV_BIN_OOO) $(SW_TESTS) $(CTEST_HEX) $(RVT_HEX)
 .PHONY: coverage
 
 # Umbrella: everything that must be green before merging to main
-verify: regress regress-isa regress-rand
+verify: regress regress-isa regress-rand regress-rand-sys regress-rand-npu regress-x
 
 # The suite targets are recipes, not files: without .PHONY a stray file
 # named e.g. "regress" would silently skip the entire suite (the -ooo
 # aliases were protected; the base targets were not — audit 2026-07-11).
-.PHONY: regress regress-rand regress-rand-vio regress-isa verify coremark
+.PHONY: regress regress-rand regress-rand-sys regress-rand-npu regress-rand-vio regress-x regress-isa verify coremark
 
 # --- OoO core aliases: identical suites, second binary ------------------------
 regress-ooo:
@@ -537,12 +629,18 @@ regress-isa-ooo:
 	$(MAKE) regress-isa RUN_BIN=$(SIM_BIN_OOO)
 regress-rand-ooo:
 	$(MAKE) regress-rand RUN_BIN=$(SIM_BIN_OOO)
+regress-rand-sys-ooo:
+	$(MAKE) regress-rand-sys RUN_BIN=$(SIM_BIN_OOO)
+regress-rand-npu-ooo:
+	$(MAKE) regress-rand-npu RUN_BIN=$(SIM_BIN_OOO)
+regress-x-ooo:
+	$(MAKE) regress-x X_RUN_BIN=$(X_BIN_OOO)
 regress-rand-vio-ooo:
 	$(MAKE) regress-rand-vio RUN_BIN=$(SIM_BIN_OOO)
 coremark-ooo:
 	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO)
-verify-ooo: regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-vio-ooo
-.PHONY: sim-ooo regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-vio-ooo \
+verify-ooo: regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo
+.PHONY: sim-ooo regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo \
         coremark-ooo verify-ooo
 
 run: $(RUN_BIN)
@@ -583,7 +681,7 @@ synth-sta:
 .PHONY: synth-fit synth-sta
 
 clean:
-	rm -rf obj_dir obj_dir_ooo obj_dir_npu obj_dir_stset obj_dir_prf sim.fst
+	rm -rf obj_dir obj_dir_ooo obj_dir_x obj_dir_x_ooo obj_dir_npu obj_dir_stset obj_dir_prf sim.fst
 	rm -f sw/tests/*.elf sw/tests/*.bin sw/tests/*.hex
 	rm -f sw/ctests/*.elf sw/ctests/*.bin sw/ctests/*.hex
 	rm -f sw/coremark/coremark.elf sw/coremark/*.bin sw/coremark/*.hex
