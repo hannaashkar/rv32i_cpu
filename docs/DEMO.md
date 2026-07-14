@@ -5,18 +5,21 @@ LED walker are hardware-proven (2026-07-11); the MNIST demo is
 lockstep-verified in simulation on both cores — its first board flash is
 the acceptance step. **The MNIST bitstream now builds** — D024 first made
 the design routable by moving the gshare PHT into M9Ks; D025 then moved the
-6R/3W PRF into 18 M9Ks, D026 balanced the LQ violation selector, and D027
-balanced the SQ forwarding/replay selector without changing a cycle. The
-current top on local branch `codex/sq-forward-tree` (not merged or pushed)
-fits at **34,787 / 49,760 LEs (70%)**, reaches **25.47 MHz**
-slow-85C Fmax, and closes timing at 16.67 MHz with **+20.745 ns** setup and
-**+0.337 ns** hold slack; every timing check is positive and zero paths are
-unconstrained. Fresh `.sof` and `.pof` images were assembled from the D027
-PLL-/3 fit on 2026-07-14 and are ready to flash, but neither D027 image has
-been programmed on the board. (Before D024 it failed to
-route at 96% LEs — if you are on an older checkout and hit "Can't route",
-that is why.) If anything surprises you, the board state section at the
-bottom is the first thing to check.
+6R/3W PRF into 18 M9Ks, D026 balanced the LQ selector, D027 balanced the SQ
+selector, and D028 replaced the IQ port-1 clear-and-repick chain with a
+cycle-exact top-two tree. The current top on local branch
+`codex/iq-select-pipeline` (not merged or pushed) fits at **35,096 / 49,760
+LEs (71%)**, reaches **27.02 MHz** slow-85C Fmax, and closes timing at
+16.67 MHz with **+22.994 ns** setup and **+0.372 ns** hold slack; every path
+is constrained. Both full lockstep gates pass, and line coverage is **99.2%
+(1522/1534)**. The IQ is absent from all top-20 paths; the new limiter is the
+dmem-read → load/JALR/redirect → gshare-PHT-address family. Freshness-clean
+D028 MNIST `.sof` and `.pof` images were assembled from MIF stamp `mlp` with
+0 errors / 0 warnings, but remain **unflashed**. Hardware truth is still the
+earlier 16.67 MHz LED-walker/CFM image; MNIST has not run on silicon. Before
+D024 it failed to route at 96% LEs — if you are on an older checkout and hit
+"Can't route", that is why. If anything surprises you, the board state
+section at the bottom is the first thing to check.
 
 The board top (`rtl/top/de10_top.v`) is the **2-wide out-of-order core**
 with the store-set predictor and the NPU, clocked at **16.67 MHz** (PLL /3

@@ -2,10 +2,11 @@
 
 Last updated 2026-07-14. `main` = the MNIST-demo board top with the
 banked-M9K gshare (D024) and banked-M9K PRF (D025). The active stacked feature
-branch `codex/sq-forward-tree` adds the fully verified D026 LQ timing tree +
-B015 fix and D027 SQ timing tree. It is local, not pushed or merged. Fresh
-PLL-/3 `.sof` and `.pof` images have been assembled from D027. Everything
-below is the measured backlog, most-ready first.
+branch `codex/iq-select-pipeline` contains the fully verified D026 LQ and D027
+SQ timing trees plus the fully signed-off D028 IQ top-two tournament. It is
+local, not pushed or merged. Freshness-clean PLL-/3 D028 MNIST `.sof` and
+`.pof` images are assembled but **unflashed**. Everything below is the measured
+backlog, most-ready first.
 
 Division of labor: the standing project rule assigns microarchitecture to
 Hanna and infrastructure to Codex. On 2026-07-14 Hanna explicitly delegated
@@ -18,9 +19,9 @@ revoked. Deeper evidence for the RTL levers is in
 
 ## 0. Flash the MNIST demo  — [Hanna, hardware]  ← the milestone
 
-The `.sof` is built (`synth/output_files/rv32i_cpu.sof`). This is the only
-thing between here and the demo video. **Deferred by Hanna's choice
-2026-07-12 — do NOT auto-do; it needs the physical board.**
+The fresh D028 `.sof` is built (`synth/output_files/rv32i_cpu.sof`). This is the only
+thing between the last fully signed-off image and the demo video. **Deferred
+by Hanna's choice 2026-07-12 — do NOT auto-do; it needs the physical board.**
 
 - Plug in the USB-Blaster, open Quartus Programmer, load the `.sof`, flash.
 - Flip SW[2:0] to select a digit; HEX displays show true label vs the
@@ -76,27 +77,47 @@ and 80/80 X-state runs; OoO also passes 25/25 violation stress. Quartus fits at
 paths. SQ itself is 924 combinational / 596 registers at map and 1,024 LCs /
 596 registers after fit; no serial SQ node appears in the top 20.
 
-## 4. 2-stage pipelined issue-queue scheduler  — [Codex, current limiter]
+## 4. IQ port-1 top-two tournament  — ✅ DONE (D028, branch `codex/iq-select-pipeline`, 2026-07-14)
 
-D027 promotes a clean new limiter: **all top-20 paths are now the IQ
-`rob_head → r1` selection/wakeup cone**, with a 38.744 ns worst path across 32
-logic levels. The OoO core still needs about 41.4 MHz to tie the in-order
-core's `0.849 IPC × 50 MHz`. D019 balanced the combinational select tree; the
-next meaningful wall-clock step is a true select→wakeup split. Because that
-changes scheduling latency and may change IPC, require cycle-accurate A/B
-results for CoreMark and hello, both full lockstep gates, unit-level scheduler
-checks, and full fit/top-20 STA before accepting it.
+D027's complete top-20 family came from the dependent port-1
+`pick → clear → repick` chain inside `rob_head → IQ r1`. D028 replaces it with
+one balanced sorted-pair tree that returns the two oldest ALU candidates
+together. It adds no state or latency; INV-I1 keeps the old topology live as
+an every-cycle oracle. `iq-tb` passes **300,553 cycles**, including 300,000
+random cycles, 74,571 complete 162-bit payload checks, and all 3×16 winner
+leaves. `hello.c` remains **2013 cycles / 1882 instret**.
 
-The board remains at PLL /3 (16.67 MHz). A /2 build was deliberately not
-attempted: D027's 25.47 MHz Fmax leaves only **0.745 ns theoretical setup
-margin** at 25 MHz, below the project's ≥3 ns slow-85C sign-off gate. Revisit
-/2 only after the IQ redesign creates measured margin.
+Routed evidence is complete: **35,096 LEs (71%)**, Fmax **27.02 MHz**, and
++22.994 ns setup at PLL /3. The IQ is absent from all top-20 paths. Both cores
+pass 20/20 directed+C, 40/40 rv32ui, 25/25 base/system/NPU random, and 80/80
+X/reset; OoO additionally passes LQ/SQ/IQ units and 25/25 violation stress,
+all lockstep-clean. Fresh coverage is **99.2% (1522/1534)** over 60 programs
+per core, zero failures, with every D028 IQ addition covered and the same 12
+documented lines uncovered. Reportable 720-iteration CoreMark is cycle-exact
+to D027: **1.422552 CoreMark/MHz, IPC 1.026, 506,197,207 full-run cycles,
+519,453,600 lockstep comparisons**, official CRCs and validation, zero
+divergence. D028's merge gate is complete. See `docs/IQ_TIMING.md` and
+DECISIONS D028.
 
-## 5. JALR target adder  — [Hanna, small µarch, deferred by STA]
+The board stays at PLL /3. D028 would leave a theoretical **+2.994 ns** at
+25 MHz, narrowly below the predeclared ≥3 ns slow-85C gate; no /2 claim was
+made. A final post-RTL map+fit rerun reproduced the documented results, and
+assembly completed at 22:44:32 with 0 errors / 0 warnings from MIF stamp `mlp`.
+The fresh D028 MNIST `.sof`/`.pof` are freshness-clean but unflashed, so no new
+hardware result is claimed.
 
-A dedicated rs1+imm target adder remains a clean small optimization, but JALR
-is absent from the D027 top-20 paths. Keep it queued until a later STA report
-shows the ALU/shifter/JALR cone again.
+## 5. D029 load/JALR/redirect/PHT timing path  — [Codex, next measured limiter]
+
+All D028 top-20 paths now run from the dmem M9K read through load/JALR/redirect
+logic to a gshare PHT M9K address (**36.433–36.132 ns**). Characterize the
+shared cone, separate unavoidable M9K delay from logic/routing, then present
+the smallest cycle-safe cut. A dedicated JALR target adder is again relevant,
+but must be chosen from path-level evidence rather than assumed to fix the
+whole family. Require full lockstep, workload IPC, fit, and multi-corner STA.
+
+A true registered IQ scheduler is deferred because the IQ is no longer in the
+top 20. Reconsider it only if it returns after D029 or a higher frequency goal
+requires a deeper pipeline.
 
 ## 6. IQ payload split  — [Hanna, medium µarch]
 
@@ -131,7 +152,8 @@ de-risks task #4 (less state to pipeline). Evidence: audit §1.
 - **System/decode-tail coverage — DONE 2026-07-14.** Directed
   `sys_nops.S` + additive `--sys` random lane; both cores 20/20 directed
   and 25/25 system-random, 1,148 injected words/core, zero divergence.
-  Coverage is now 99.2% (1488/1500 on D027); established seed streams unchanged.
+  Coverage is now 99.2% (1522/1534 on D028), with every new IQ line covered;
+  established seed streams are unchanged.
 - **NPU-region random mode — DONE 2026-07-14.** Additive `--npu` bursts
   exercise back-to-back GO, staging/readback ordering, busy-time immediate
   address/data dependencies, STATUS/ID/unmapped reads. Both cores 25/25;
@@ -156,6 +178,10 @@ de-risks task #4 (less state to pipeline). Evidence: audit §1.
 - `codex/sq-forward-tree` = D027 stacked on D026; full sim, reportable
   CoreMark, coverage, fit, STA, `.sof`, and `.pof` green. Local only: not
   pushed or merged.
+- `codex/iq-select-pipeline` = D028 stacked on D027; all unit/system lockstep
+  gates, fresh coverage, hello.c, reportable CoreMark, fit, and STA green.
+  Fresh D028 MNIST `.sof`/`.pof` assembled and freshness-clean. Local only: not
+  merged or pushed; images unflashed and not hardware-confirmed.
 - Feature branches `mlp-board-demo`, `gshare-m9k-pht` pushed (now folded
   into main; safe to delete locally once you're comfortable).
 - Env: the old build landmines are guarded in the Makefile — `make` just

@@ -81,21 +81,29 @@ shipping PLL /3 clock:
 | Slow-85C Fmax | 25.10 MHz | **25.47 MHz** |
 | Setup slack at 16.67 MHz | +20.166 ns | **+20.745 ns** |
 
-The old serial selector is absent from all top-20 timing paths. The small
-top-level Fmax gain is not a failed rewrite: it exposes a near-equal path that
-was previously hidden. Every new top-20 path starts at `rob_head` and crosses
-the issue queue's relative-age, eligibility, selection, and wakeup logic into
-`r1`; the worst data delay is 38.744 ns across 32 logic levels.
+> **Historical D027 checkpoint, superseded by D028:** the D027 numbers above
+> and discussion below explain what D027 exposed and why D028 followed. They
+> are not the current limiter or programming image; see
+> [IQ_TIMING.md](IQ_TIMING.md).
 
-PLL /2 was rejected by a predeclared margin gate. A 25.47 MHz routed Fmax
-implies only about +0.745 ns setup margin at 25 MHz, versus +3 ns minimum and
-+5 ns preferred. The current `.sof`/`.pof` therefore remain at 16.67 MHz.
+At D027, the old serial SQ selector was absent from all top-20 timing paths.
+The small top-level Fmax gain was not a failed rewrite: it exposed a near-equal
+path that had previously been hidden. Every D027 top-20 path started at
+`rob_head` and crossed the issue queue's relative-age, eligibility, selection,
+and wakeup logic into `r1`; the worst data delay was 38.744 ns across 32 logic
+levels.
+
+PLL /2 was rejected at D027 by a predeclared margin gate. A 25.47 MHz routed
+Fmax implied only about +0.745 ns setup margin at 25 MHz, versus +3 ns minimum
+and +5 ns preferred. The D027 `.sof`/`.pof` therefore remained at 16.67 MHz.
 
 ## Engineering takeaway
 
 This increment demonstrates the complete FPGA optimization loop: identify a
 path from routed STA, preserve behavior with a live equivalence oracle, add an
 independent stateful model and invariants, prove benchmark cycle identity,
-refit, and let the new STA—not intuition—choose the next change. The next
-measured lever is a true two-stage IQ select/wakeup scheduler; it is an
-architectural latency change and must be evaluated with IPC as well as Fmax.
+refit, and let the new STA—not intuition—choose the next change. D027 pointed
+at IQ selection. D028 then removed its measured clear-and-repick chain with a
+cycle-exact top-two tree rather than adding scheduler latency; the IQ left the
+top 20. The current measured lever is the dmem-read → load/JALR/redirect →
+gshare-PHT-address path documented in [IQ_TIMING.md](IQ_TIMING.md).

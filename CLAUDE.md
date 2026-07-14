@@ -691,20 +691,65 @@ pushed):**
   **not** been flashed. Hardware truth remains the earlier OoO LED walker/CFM
   image at 16.67 MHz; physical MNIST inference is still pending.
 
+**2026-07-14 (latest) — D028 issue-queue port-1 top-two timing rewrite
+(branch `codex/iq-select-pipeline`, stacked on D027; LOCAL, NOT merged or
+pushed; merge gate COMPLETE; fresh bitstreams UNFLASHED):**
+- D027's complete top-20 family was the dependent
+  `pick → one-hot clear → repick` path inside the IQ port-1 selector. D028
+  replaces it with one balanced sorted-pair tournament that returns the oldest
+  two ALU candidates together. No state, public latency, wakeup rule, or
+  recovery behavior changed. The old topology remains live as Verilator
+  oracle INV-I1 every cycle.
+- New independent public-interface `iq-tb`: **300,553 cycles PASS**, including
+  300,000 deterministic random cycles, **74,571 complete 162-bit payload
+  checks**, 36,515/9,816/28,240 selections on ports 0/1/2, and every mandatory
+  occupancy, age, wakeup, mask, replay, flush/reset, and 3×16 winner bin.
+- Full gates are green: both cores **20/20 directed+C, 40/40 rv32ui, 25/25
+  base/system/NPU random, and 80/80 X/reset**; OoO also passes LQ/SQ/IQ units
+  and **25/25 violation stress**. Every system run is lockstep-clean with zero
+  divergence. `hello.c` is exactly unchanged at **2013 cycles / 1882
+  instret**. Fresh line coverage is **99.2% (1522/1534)** across 60 programs
+  per core with zero failures; all D028 IQ additions are covered and the same
+  12 lines remain uncovered.
+- Reportable 720-iteration CoreMark is cycle-exact to D027: **506,132,722
+  benchmark ticks, 10.122654 s, 71.127589 iterations/s = 1.422552
+  CoreMark/MHz, 506,197,207 full-run cycles, 519,453,600 instret/lockstep
+  comparisons, IPC 1.026**. Official CRCs and reportable validation pass with
+  zero divergence. D028's merge gate is complete.
+- Full board fit/STA is complete: **37,874 mapped LEs; 35,096/49,760 fitted
+  LEs (71%), 15,138 registers, 632,444 memory bits, 16 multiplier elements**.
+  IQ = 8,565 fitted LCs / 2,720 registers versus D027 8,270 / 2,720. Slow-85C
+  Fmax **27.02 MHz**; PLL-/3 setup +22.994 ns, hold +0.372 ns, recovery +52.869
+  ns, removal +1.653 ns, all timing positive, zero unconstrained paths.
+- The IQ is absent from every top-20 path. The new 36.433–36.132 ns family is
+  dmem M9K read → load/JALR/redirect → gshare PHT M9K address. A true scheduler
+  pipeline is deferred because it no longer targets the measured wall. D029
+  attacks this new path first.
+- Keep PLL /3. The theoretical PLL-/2 margin is **+2.994 ns**, narrowly below
+  the predeclared ≥3 ns gate. A final post-RTL map+fit rerun exactly reproduced
+  the documented D028 numerical results. With MIF stamp `mlp`, `quartus_asm` completed
+  at 22:44:32 with **0 errors / 0 warnings**, producing freshness-clean D028
+  MNIST `.sof`/`.pof` images. They remain **unflashed** and are not hardware
+  evidence; hardware truth is still the earlier LED-walker/CFM image. Full
+  record: `docs/IQ_TIMING.md`, DECISIONS D028.
+
 **Next → see `docs/NEXT.md` (the start-here backlog).** In brief:
 (0) **Flash the MNIST demo** — `.sof` is built; DEFERRED by Hanna
 2026-07-12, it's her hardware step (USB-Blaster → digit demo → video).
 Do NOT auto-do. (1) ~~PRF→M9K LVT~~ **DONE + merged (D025, `ab79b50`,
 −8,895 LEs → 70%, IPC-neutral).** (2) ~~LQ timing tree~~ **DONE D026;
 stacked locally.** (3) ~~SQ forwarding/replay tree~~ **DONE D027; cycle-exact,
-full-gate green, PLL /3 retained, local/not merged or pushed.** (4) **Issue
-queue timing** — current measured limiter is `rob_head`→`r1`; choose the next
-scheduler change from post-D027 evidence before touching RTL. (5) JALR target
-adder only if it returns to the measured paths. (6) IQ payload split (~3k
+full-gate green, PLL /3 retained, local/not merged or pushed.** (4) ~~IQ
+top-two tree D028~~ **DONE** — full unit/system/benchmark lockstep gates,
+fresh coverage, hello.c, fit, and STA green; local/not merged or pushed, with
+freshness-clean D028 MNIST bitstreams assembled but unflashed.
+(5) **D029 load/JALR/redirect/PHT path** — current measured limiter; characterize
+before changing RTL. True scheduler pipelining is deferred because IQ is gone
+from the top 20. (6) IQ payload split (~3k
 LEs). (7) Small infra: NPU on-board error patterns, `make -j` suites,
 loop/call-tree/RAS random coverage, INV-G2 negative self-test. **Env note:**
 the two old build landmines are
 GUARDED IN THE MAKEFILE — `make` just works; if overriding, VERILATOR_ROOT
 must be `/ucrt64/share/verilator` (mount form). D024/D025 are merged;
-D026+D027 are stacked locally on `codex/sq-forward-tree`;
+D026+D027 are committed locally; D028 is active on `codex/iq-select-pipeline`;
 physical flashing remains Hanna's deferred hardware step.

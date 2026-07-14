@@ -19,6 +19,19 @@
 > **[SQ_TIMING.md](SQ_TIMING.md)**. This is an implementation optimization—no
 > SQ state, load latency, ordering rule, or IPC changed.
 
+> **Current implementation note (D028).** Port 1 no longer waits for an
+> oldest-ALU pick, a one-hot clear, and a second complete pick. One balanced
+> sorted-pair tree returns the oldest two candidates together, with the old
+> topology retained as Verilator oracle INV-I1. The public grants remain
+> combinational, `hello.c` remains 2013 cycles / 1882 instret, and no issue or
+> dependency latency changed. The independent 300,553-cycle IQ model and
+> routed evidence are in **[IQ_TIMING.md](IQ_TIMING.md)**. The full both-core
+> verification gate and fresh 99.2% line coverage are green. Reportable
+> CoreMark is cycle-exact to D027 at 1.422552 CoreMark/MHz and IPC 1.026, with
+> official CRCs and zero divergence. D028 is fully signed off but remains
+> local—not merged or pushed. Freshness-clean MNIST `.sof`/`.pof` images are
+> assembled at PLL /3 but unflashed, so D028 is not hardware-confirmed.
+
 ## Measured result (2026-07-03, same binary as the baseline)
 
 | Metric | in-order (v1.0 tag) | **ooo_cpu** | delta |
@@ -58,7 +71,7 @@ top with the identical external interface (clk, reset, leds, switches).
 | RAT | 32 × 6b | speculative map; x0 → p0 always |
 | Free list | ring of 32 tags | initially p32..p63 |
 | ROB | 32 entries | 2-wide alloc/retire; stores result value (lockstep/debug) |
-| Issue queue | 16 entries | unified, age = ROB tag order, select ≤3/cycle (1/port) |
+| Issue queue | 16 entries | unified, age = ROB tag order, select ≤3/cycle (1/port); balanced oldest and top-two tournaments (D019/D028) |
 | Store queue | 8 entries | alloc at rename, fill at EX, commit at retire |
 | Checkpoints | 8 | per control-flow op (branch/JALR): RAT+flhead+sqtail+GHR+RAS-TOS |
 | gshare | 1024 × 2b PHT, 10b GHR | speculative GHR update at fetch, repair on restore |

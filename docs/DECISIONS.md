@@ -5,6 +5,80 @@ Decisions are Hanna's; entries are logged so each one can be defended later.
 
 ---
 
+## D028 — 2026-07-14 — IQ port-1 clear-and-repick chain → cycle-exact balanced top-two tournament; scheduler pipeline deferred after IQ leaves the timing wall
+
+**Decision:** replace the issue queue's dependent `pick → one-hot clear →
+repick` path with one balanced sorted-pair tournament that returns the oldest
+and second-oldest eligible ALU entries together. Hanna delegated the
+performance-phase architecture call. D027 STA showed all top-20 paths crossing
+the old port-1 chain from `rob_head` into IQ operand-ready state, at 38.744 ns
+and 32 logic levels. Three options were evaluated:
+
+1. Register issue grants and split select from wakeup. This gives a hard timing
+   cut, but adds scheduling latency, changes dependency spacing and IPC, and
+   complicates flush and folded-PRF alignment.
+2. Bank or payload-split the IQ. This remains a useful area/frequency lever,
+   but is broader than the measured second-winner dependency.
+3. Compute the two oldest entries in one balanced tournament. This removes the
+   measured serial dependency while preserving the current cycle contract.
+
+Option 3 was selected as the smallest evidence-backed architectural change.
+
+**Exact contract:** every leaf is a sorted pair containing its real candidate
+and an invalid runner-up. Each `pair_cmb2()` node merges two sorted pairs into
+their oldest and second-oldest entries using the existing unsigned modular ROB
+age and lower-index tie break. Port 1 takes the runner-up only when port 0
+consumed the oldest ALU; otherwise it takes the oldest. The three public grants
+remain combinational. No state, pipeline stage, issue latency, wakeup rule,
+load replay rule, or recovery behavior changes.
+
+**Proof:** INV-I1 keeps the former pick/clear/repick topology live under
+Verilator and compares both raw winners plus the consumed port-1 result every
+cycle. The independent public-interface `iq-tb` checks all 162 payload bits,
+modular-age and class arbitration, select/load wakeup, masks, dispatch,
+replay/done, branch/full flush, and reset. It passes **300,553 cycles**
+(300,000 random), **74,571 complete-payload checks**, and **36,515 / 9,816 /
+28,240 port selections**, with mandatory occupancy 0–16 and winner coverage
+for all 3×16 leaves. Both cores pass 20/20 directed+C, 40/40 rv32ui, 25/25
+base/system/NPU random, and 80/80 X/reset; OoO also passes the LQ/SQ/IQ units
+and 25/25 violation stress. Every system run is lockstep-clean with zero
+divergence. Fresh combined coverage is **99.2% (1522/1534)** across 60 programs
+per core with zero failures; every D028 IQ addition is covered, and the same 12
+documented lines remain uncovered. `hello.c` is unchanged at **2,013 cycles /
+1,882 instret**.
+
+**Performance:** reportable 720-iteration CoreMark is cycle-exact to D027:
+**506,132,722 benchmark ticks, 10.122654 s, 71.127589 iterations/s = 1.422552
+CoreMark/MHz, 506,197,207 full-run cycles, 519,453,600 instret/lockstep
+comparisons, and IPC 1.026**. All official CRCs and reportable-validation
+checks pass with zero divergence. D028 therefore completes its merge gate as
+a pure implementation/timing change.
+
+**Quartus result:** Analysis & Synthesis is **37,874 LEs**; the routed board
+top is **35,096 / 49,760 LEs (71%)**, 15,138 registers, 632,444 memory bits,
+and 16 multiplier elements. IQ cost is **8,565 fitted LCs / 2,720 registers**
+versus D027's 8,270 / 2,720: +295 LCs and zero state growth. Slow-85C Fmax is
+**27.02 MHz**. At PLL /3, setup is +22.994 ns, hold +0.372 ns, recovery
++52.869 ns, and removal +1.653 ns; every timing class is positive and all five
+unconstrained counts are zero. The IQ is absent from all top-20 paths. The new
+family runs from dmem M9K read through load/JALR/redirect logic to a gshare PHT
+M9K address, at 36.433–36.132 ns.
+
+**Clock call:** retain **PLL /3 = 16.67 MHz**. Moving to 25 MHz consumes 20 ns
+of the measured setup slack and leaves a theoretical **+2.994 ns**, narrowly
+below the predeclared ≥3 ns production gate. A true scheduler pipeline is
+deferred because the scheduler is no longer the measured limiter; D029 targets
+the new load/JALR/redirect/PHT path first.
+
+**Physical freshness:** a final clean map+fit rerun after the last RTL text
+exactly reproduces the documented D028 numeric fit/STA results. With MIF stamp `mlp`,
+`quartus_asm rv32i_cpu` completed at 22:44:32 with **0 errors / 0 warnings** and
+produced fresh PLL-/3 D028 MNIST `.sof` and `.pof` images. The entire input to
+assembly freshness chain is clean. The images remain **unflashed** and are not
+hardware evidence; silicon truth remains the earlier LED-walker/CFM image at
+16.67 MHz. MNIST inference on the board is still pending. Full design and evidence:
+**[IQ_TIMING.md](IQ_TIMING.md)**.
+
 ## D027 — 2026-07-14 — SQ forwarding/replay selector → cycle-exact balanced tree; serial path removed, IQ age/select becomes the measured wall
 
 **Decision:** replace only the store queue's source-ordered youngest-match

@@ -263,6 +263,25 @@ sq-tb: $(SQ_TB)
 	./$(SQ_TB)
 .PHONY: sq-tb
 
+# --- issue-queue unit testbench (D028 scheduler tournament/pipeline) ----------
+# Public-interface lifecycle/selection model.  It checks the complete 162-bit
+# selected payload, exact modular-age/port arbitration, wakeup, wait masks,
+# replay, and both recovery paths over directed cases + 300k random cycles.
+IQ_TB := obj_dir_iq/Vooo_iq
+
+$(IQ_TB): Makefile rtl/ooo/ooo_iq.v rtl/ooo/ooo_pkg.vh rtl/ooo/ooo_uop.vh \
+          tb/verilator/iq_tb.cpp
+	@$(CHECK_VROOT)
+	$(VERILATOR) --cc --exe --build -j 0 --top-module ooo_iq \
+	    --Mdir obj_dir_iq -Wno-fatal -Irtl/ooo \
+	    -MAKEFLAGS OPT_FAST=-O2 -MAKEFLAGS OPT_SLOW=-O2 \
+	    -MAKEFLAGS OPT_GLOBAL=-O2 -MAKEFLAGS VM_PARALLEL_BUILDS=1 \
+	    rtl/ooo/ooo_iq.v tb/verilator/iq_tb.cpp -o Vooo_iq
+
+iq-tb: $(IQ_TB)
+	./$(IQ_TB)
+.PHONY: iq-tb
+
 # --- software build ------------------------------------------------------------
 sw: $(SW_TESTS)
 
@@ -697,7 +716,7 @@ coremark-ooo:
 	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO) CM_ITER=$(CM_ITER)
 coremark-quick-ooo:
 	$(MAKE) coremark RUN_BIN=$(SIM_BIN_OOO) CM_ITER=10 CM_REQUIRE_REPORT=0
-verify-ooo: lq-tb sq-tb regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo
+verify-ooo: lq-tb sq-tb iq-tb regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo
 .PHONY: sim-ooo regress-ooo regress-isa-ooo regress-rand-ooo regress-rand-sys-ooo regress-rand-npu-ooo regress-x-ooo regress-rand-vio-ooo \
 	    coremark-ooo coremark-quick-ooo verify-ooo
 
@@ -739,7 +758,7 @@ synth-sta:
 .PHONY: synth-fit synth-sta
 
 clean:
-	rm -rf obj_dir obj_dir_ooo obj_dir_x obj_dir_x_ooo obj_dir_npu obj_dir_stset obj_dir_prf obj_dir_lq obj_dir_sq sim.fst
+	rm -rf obj_dir obj_dir_ooo obj_dir_x obj_dir_x_ooo obj_dir_npu obj_dir_stset obj_dir_prf obj_dir_lq obj_dir_sq obj_dir_iq sim.fst
 	rm -f sw/tests/*.elf sw/tests/*.bin sw/tests/*.hex
 	rm -f sw/ctests/*.elf sw/ctests/*.bin sw/ctests/*.hex
 	rm -f sw/coremark/coremark.elf sw/coremark/*.bin sw/coremark/*.hex

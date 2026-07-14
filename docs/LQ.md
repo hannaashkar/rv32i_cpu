@@ -11,23 +11,24 @@ and the serial violation select was replaced by a fixed 8→4→2→1 minimum-ag
 tree with a simulation-only serial oracle. That change improved board-top
 Fmax **23.51 → 25.10 MHz (+6.8%)** and removed the LQ from every top-20 path.
 
-Current D027 system evidence on local branch `codex/sq-forward-tree` (not
-merged or pushed) adds a cycle-exact balanced SQ selector and a 300,087-cycle
-standalone `sq-tb`. Both cores pass 20/20 directed+C, 40/40
-rv32ui, 25/25 base, 25/25 system-tail, 25/25 NPU/MMIO, and 80/80 randomized-
-reset runs; OoO additionally passes 25/25 `--vio`, all lockstep-clean. Line
-coverage is **99.2% (1488/1500)**. Reportable CoreMark remains cycle-identical
-to D026 at **1.422552 CoreMark/MHz, IPC 1.026, 506,197,207 cycles, and
-519,453,600 retired instructions lockstep-checked**. The D027 board top fits
-at **34,787 LEs (70%)**, 95 M9Ks, and 16 embedded 9×9 multiplier elements
-(9 DSP blocks); slow-85C Fmax is **25.47 MHz**,
-with +20.745 ns setup and +0.337 ns hold slack at PLL /3, every timing check
-positive, and zero unconstrained paths. The LQ and SQ are absent from all
-top-20 paths. The new measured limiter is the issue queue's `rob_head`→`r1`
-path (38.744 ns,
-32 logic levels), so SQ/LQ work is no longer the next timing target. PLL /2
-was rejected: its 0.745 ns theoretical setup margin misses the 3 ns signoff
-gate.
+Current D028 system evidence on local branch `codex/iq-select-pipeline` (not
+merged or pushed) adds the cycle-exact SQ selector and IQ top-two tournament,
+with independent 300,087-cycle `sq-tb` and 300,553-cycle `iq-tb` models. Both
+cores pass 20/20 directed+C, 40/40 rv32ui, 25/25 base, 25/25 system-tail,
+25/25 NPU/MMIO, and 80/80 randomized-reset runs; OoO additionally passes all
+LQ/SQ/IQ units and 25/25 `--vio`, all lockstep-clean. Line coverage is **99.2%
+(1522/1534)**. Reportable CoreMark is cycle-exact to D027 at **1.422552
+CoreMark/MHz, IPC 1.026, 506,197,207 cycles, and 519,453,600 retired
+instructions lockstep-checked**. The D028 board top fits at **35,096 LEs
+(71%)**, 95 M9Ks, and 16 embedded 9×9 multiplier elements (9 DSP blocks);
+slow-85C Fmax is **27.02 MHz**, with +22.994 ns setup and +0.372 ns hold slack
+at PLL /3, and all paths constrained. The LQ, SQ, and IQ selector chains are
+absent from all top-20 paths. The new measured limiter is the dmem-read →
+load/JALR/redirect → gshare-PHT-address family (36.433–36.132 ns), so queue
+selection is no longer the next timing target. PLL /2 remains rejected: its
+2.994 ns theoretical setup margin narrowly misses the 3 ns signoff gate.
+Freshness-clean D028 MNIST `.sof`/`.pof` images are assembled but unflashed;
+hardware truth remains the earlier LED-walker/CFM image.
 
 Historical D020 characterization remains useful: CoreMark (rare violations)
 was **1.026** speculative vs **1.006** conservative IPC (+2.0%), while hello.c
